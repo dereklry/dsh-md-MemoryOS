@@ -312,5 +312,62 @@ const clean = () => rmSync(tmp, { recursive: true, force: true })
   ok(['index.js', 'client.js', 'lib', 'package.json', 'cordis.patch.yml'].every((x) => pkgJson.files.includes(x)), 'G22 files 含五件套（漏 patch／漏 package.json＝装不上或面板不出现）')
 }
 
+// ————————————————————————————————— K 文档与代码对账（四份文档最容易坏在漂移，让它当场变红）
+{
+  const idx = readFileSync(path.join(PKG, 'index.js'), 'utf8')
+  const docs = {}
+  for (const f of ['README.md', 'docs/DESIGN.md', 'docs/JUDGMENTS.md', 'docs/AGENT-GUIDE.md', 'docs/WORKFLOW.md']) {
+    ok(existsSync(path.join(PKG, f)), `K0 文档在场：${f}`)
+    docs[f] = readFileSync(path.join(PKG, f), 'utf8')
+  }
+  const all = Object.values(docs).join('\n')
+
+  // K1 共享项目不得夹带维护者本机私货（仓名/账本名/条目号）
+  const leak = all.match(/X-workspace|X-ops|X-flow|X-INDEX\.md|WX1[0-9]|proj_x_|\.venv[\\/]Scripts/g) || []
+  ok(leak.length === 0, `K1 文档不夹带维护者本机私货（命中 ${leak.length}：${[...new Set(leak)].join(' ')}）`)
+
+  // K2 文档里出现的工具名必须是真注册的
+  const realTools = new Set(['memoryos_status', 'memoryos_switch', 'memoryos_setup'])
+  const named = new Set((all.match(/memoryos_[a-z-]+/g) || []).map((s) => s.replace(/-+$/, '')))
+  const ghost = [...named].filter((x) => !realTools.has(x))
+  ok(ghost.length === 0, `K2 文档提到的工具都真实存在（幽灵：${ghost.join(' ')}）`)
+
+  // K3 setup 的 action 名与代码分支同源
+  const realActions = new Set(['probe', 'save-key', 'where-key', 'list'])
+  const inDocs = (docs['docs/AGENT-GUIDE.md'].match(/action:\s*'([a-z-]+)'/) || [])[1]
+  ok(inDocs === 'probe' || inDocs === undefined, `K3a 示例 action 合法（${inDocs}）`)
+  const mentioned = new Set((all.match(/action='([a-z-]+)'/g) || []).map((s) => /'([a-z-]+)'/.exec(s)[1]))
+  const badAct = [...mentioned].filter((a) => !realActions.has(a))
+  ok(badAct.length === 0, `K3b 文档写的 action 代码里都有（多余：${badAct.join(' ')}）`)
+
+  // K4 配置键：只查 §7 那张表（早先扫全文，把 §3/§4 的账本字段、状态字段误当配置键——本轮实踩）
+  const cfgKeys = new Set((idx.match(/c\.([A-Za-z]+)/g) || []).map((s) => s.slice(2)))
+  const sec7 = (/^## 7\.[\s\S]*?(?=^## 8\.)/m.exec(docs['docs/DESIGN.md']) || [''])[0]
+  const listed = [...new Set(sec7.split(/\r?\n/)
+    .filter((l) => /^\|/.test(l) && !/^\|\s*-/.test(l))
+    .flatMap((l) => (l.split('|')[1] || '').match(/`([A-Za-z][A-Za-z0-9]*)`/g) || [])
+    .map((s) => s.replace(/`/g, '')))]
+  const unknown = listed.filter((k) => !cfgKeys.has(k))
+  ok(listed.length >= 12, `K4a §7 配置表有货（列出 ${listed.length} 个键）`)
+  ok(unknown.length === 0, `K4b §7 每个配置键都被 readCfg 真读（未识别：${unknown.join(' ')}）`)
+  const missing = [...cfgKeys].filter((k) => !listed.includes(k))
+  ok(missing.length === 0, `K4c 反向也对账：readCfg 读的键都写进了文档（漏文档：${missing.join(' ')}）`)
+  // K5 状态六档与实现计数对得上（文档说"未实现 5"，代码就得正好 5 个 todo）
+  const todoN = F.FEATURES.filter((f) => f.impl === 'todo').length
+  const liveN = F.FEATURES.filter((f) => f.impl !== 'todo').length
+  ok(/未实现 5/.test(docs['docs/WORKFLOW.md']) === (todoN === 5) && /生效中 3/.test(docs['docs/WORKFLOW.md']),
+    `K5 概览计数与登记表一致（live=${liveN}，todo=${todoN}）`)
+  ok(['on', 'off', 'waiting', 'degraded', 'unavailable', 'planned'].every((s) => new RegExp(`\`?${s}\`?`).test(docs['docs/DESIGN.md'])),
+    'K6 六档状态在设计文档里都有定义（新增档必须写进来，否则面板中文无处可查）')
+
+  // K7 契约与前后端一致：patch id、槽位、前缀三处不得各自漂移
+  const patch = readFileSync(path.join(PKG, 'cordis.patch.yml'), 'utf8')
+  ok(patch.includes(`id: ${pkgJson.name}`) && docs['docs/DESIGN.md'].includes(A.PREFIX) && docs['docs/DESIGN.md'].includes('settings.section'),
+    'K7 装载契约三处同字：patch id == 包名、DESIGN 写了 HTTP 前缀与槽位名')
+  for (const f of ['docs/WORKFLOW.md', 'docs/AGENT-GUIDE.md', 'docs/DESIGN.md', 'docs/JUDGMENTS.md']) {
+    ok(docs['README.md'].includes(f), `K7b README 索引指向 ${f}（四份文档都得有入口，写了没人读＝没写）`)
+  }
+}
+
 clean()
 console.log(`\nALL PASS (${n} checks)`)
