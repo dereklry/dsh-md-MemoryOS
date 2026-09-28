@@ -268,7 +268,86 @@ window.__ModuleLoader__.load({
 					e("div", { style: ST.meta }, "Key 明文只落文件：不进本账、不进日志、不回显，这里最多出现掩码。")));
 		}
 
-		var TABS = [["feat", "功能开关"], ["overview", "概览"], ["deps", "依赖与路径"], ["ledger", "账本"]];
+		/** 资料面：管理范围（目录）＋排除（子目录/文件）＋固定的文件类型。
+		 *  写操作全走 /surface（与模型工具同一个 writeSurface），返回即带新快照。 */
+		function Surface(props) {
+			var s = props.snap.surface;
+			var busy = props.busy;
+			var act = props.act;
+			var st1 = useState(""), rootBox = st1[0], setRootBox = st1[1];
+			var st2 = useState(""), patBox = st2[0], setPatBox = st2[1];
+			function addRoot() { var p = rootBox.trim(); if (!p) return; act({ path: "/surface", body: { op: "add-root", path: p } }); setRootBox(""); }
+			function addEx(hide) { var p = patBox.trim(); if (!p) return; act({ path: "/surface", body: { op: hide ? "add-exclude" : "preview", pattern: p } }); }
+			return e("div", { style: ST.page },
+				e("div", { style: ST.card },
+					e("div", ST.row,
+						e("div", { style: ST.h }, "当前管理范围"),
+						Badge({ text: s.totals.roots + " 个目录", kind: "off" }),
+						Badge({ text: "纳管 " + s.totals.managed + " 个文件", kind: "ok" }),
+						s.totals.hidden ? Badge({ text: "被排除 " + s.totals.hidden, kind: "warn" }) : null,
+						s.totals.dirsMissing ? Badge({ text: s.totals.dirsMissing + " 个目录不存在", kind: "danger" }) : null),
+					e("div", { style: ST.meta },
+						"文件类型＝", e("b", null, s.exts.join(" ")), "（本版本固定；面板不给输入框是有意为之）",
+						"｜扫描跳过目录：", s.prune.join(" "),
+						s.totals.capped ? "｜有目录命中计数上限，数字带 + 号（只数不读内容，索引是另一件事）" : ""),
+					s.roots.length === 0
+						? e("div", { style: ST.note }, "（还没有任何记忆根：填 profile 的 config.memoryRoot，或在下面添加目录）")
+						: Table(["目录", "来源", "纳管 .md", "被排除", "样本", "操作"], s.roots, function (r, i) {
+							return e("tr", { key: (r.path || "r") + i, "data-sev": "mos:root:" + String(r.path) },
+								e("td", { style: ST.td }, e("code", { style: ST.code }, r.path),
+									r.exists ? null : e("div", { style: ST.meta }, Badge({ text: "不存在", kind: "danger" }), " ", String(r.why || ""))),
+								e("td", { style: ST.td }, r.source === "profile"
+									? e("span", null, Badge({ text: "profile 基线", kind: "off" }), e("div", { style: ST.meta }, "面板不删它；要改改 profile 并重启"))
+									: e("span", null, Badge({ text: r.by === "llm" ? "模型添加" : "面板添加", kind: "warn" }), e("div", { style: ST.meta }, String(r.ts || "").slice(0, 10)))),
+								e("td", { style: ST.td }, r.exists ? String(r.matched) + (r.capped ? "+" : "") : "—"),
+								e("td", { style: ST.td }, r.exists ? Object.keys(r.byRule || {}).length
+									? e("span", null, String(r.excluded), e("div", { style: ST.meta }, Object.keys(r.byRule).slice(0, 3).map(function (p) { return e("div", { key: p }, p + " → " + r.byRule[p] + " 个"); })))
+									: String(r.excluded) : "—"),
+								e("td", { style: ST.td }, r.exists && r.samples.length
+									? e("div", null, r.samples.slice(0, 3).map(function (p) { return e("div", { key: p, style: ST.meta }, p); }))
+									: e("span", { style: ST.meta }, "（无命中）")),
+								e("td", { style: ST.td }, r.removable
+									? e("button", { style: ST.btn, disabled: busy, "data-sev": "mos:root-drop:" + String(r.path), title: "移出管理范围（写一行账，可追溯）", onClick: function () { act({ path: "/surface", body: { op: "drop-root", path: r.path } }); } }, "移除")
+									: null));
+						}),
+					e("div", ST.row,
+						e("input", {
+							style: mix(ST.btn, { minWidth: 320, textAlign: "left", background: "none" }), value: rootBox, placeholder: "添加资料目录（绝对路径，或 ~ 开头）",
+							disabled: busy, onChange: function (ev) { setRootBox(ev.target.value); },
+						}),
+						e("button", { style: mix(ST.btn, ST.tabOn), disabled: busy || !rootBox.trim(), "data-sev": "mos:root-add", onClick: addRoot }, "纳入管理"))),
+				e("div", { style: ST.card },
+					e("div", { style: ST.h }, "排除规则（子目录与具体文件）"),
+					e("div", { style: ST.meta },
+						"写法：", e("code", { style: ST.code }, "notes/drafts/"), "＝某根下那个子树；",
+						e("code", { style: ST.code }, "todo.md"), "＝任意层级同名文件；",
+						e("code", { style: ST.code }, "*.draft.md"), "＝命名模式；",
+						e("code", { style: ST.code }, "archive/**"), "＝跨层子树。绝对路径也支持。"),
+					s.excludes.length === 0
+						? e("div", { style: ST.note }, "（还没有排除规则）")
+						: Table(["规则", "挡了多少", "谁加的", "操作"], s.excludes, function (x, i) {
+							return e("tr", { key: x.pattern + i, "data-sev": "mos:ex:" + x.pattern },
+								e("td", { style: ST.td }, e("code", { style: ST.code }, x.pattern)),
+								e("td", { style: ST.td }, x.hits ? String(x.hits) + " 个文件" : e("span", { style: ST.meta }, "0（可能写错了，先试算）")),
+								e("td", { style: ST.td }, (x.by === "llm" ? "模型" : "用户") + " · " + String(x.ts || "").slice(0, 10)),
+								e("td", { style: ST.td }, e("button", { style: ST.btn, disabled: busy, "data-sev": "mos:ex-drop:" + x.pattern, onClick: function () { act({ path: "/surface", body: { op: "drop-exclude", pattern: x.pattern } }); } }, "解除")));
+						}),
+					e("div", ST.row,
+						e("input", {
+							style: mix(ST.btn, { minWidth: 320, textAlign: "left", background: "none" }), value: patBox, placeholder: "如 notes/drafts/ 或 todo.md 或 *.draft.md",
+							disabled: busy, onChange: function (ev) { setPatBox(ev.target.value); },
+						}),
+						e("button", { style: ST.btn, disabled: busy || !patBox.trim(), "data-sev": "mos:ex-preview", title: "先看看会挡住哪些文件（不落账）", onClick: function () { addEx(false); } }, "试算"),
+						e("button", { style: mix(ST.btn, ST.tabOn), disabled: busy || !patBox.trim(), "data-sev": "mos:ex-add", onClick: function () { addEx(true); } }, "排除")),
+					e("div", { style: ST.meta }, "提示：", s.hint)),
+				e("div", { style: ST.card },
+					e("div", { style: ST.h }, "资料面账本"),
+					e("div", { style: ST.meta }, "append-only，一次操作＝一行：", e("code", { style: ST.code }, s.ledger.file),
+						"｜共 ", e("b", null, s.ledger.lines), " 行", s.ledger.corrupt ? "｜坏行 " + s.ledger.corrupt + "（已跳过）" : ""),
+					e("div", { style: ST.meta }, "profile 基线（config.memoryRoot）在这是只读的：它属于宿主配置，改它要重启，插件不代写。")));
+		}
+
+		var TABS = [["feat", "功能开关"], ["surface", "资料面"], ["overview", "概览"], ["deps", "依赖与路径"], ["ledger", "账本"]];
 
 		function Panel() {
 			var st = useState(null), snap = st[0], setSnap = st[1];
@@ -310,6 +389,7 @@ window.__ModuleLoader__.load({
 					err ? e("div", { style: ST.note }, err) : null,
 					e("div", { style: ST.meta }, "面板不缓存快照：点右上「刷新」即重读宿主现算状态。"));
 			} else if (tab === "feat") body = Features({ snap: snap, busy: busy, act: act });
+			else if (tab === "surface") body = Surface({ snap: snap, busy: busy, act: act });
 			else if (tab === "overview") body = Overview({ snap: snap });
 			else if (tab === "deps") body = Deps({ snap: snap });
 			else body = Ledger({ snap: snap });

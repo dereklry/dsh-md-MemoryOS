@@ -42,6 +42,7 @@ const F = await import(pathToFileURL(path.join(PKG, 'lib', 'features.js')).href)
 const S = await import(pathToFileURL(path.join(PKG, 'lib', 'switches.js')).href)
 const P = await import(pathToFileURL(path.join(PKG, 'lib', 'probes.js')).href)
 const U = await import(pathToFileURL(path.join(PKG, 'lib', 'setup.js')).href)
+const V = await import(pathToFileURL(path.join(PKG, 'lib', 'surface.js')).href)
 const A = await import(pathToFileURL(path.join(PKG, 'lib', 'api.js')).href)
 const H = await import(pathToFileURL(path.join(PKG, 'index.js')).href)
 
@@ -141,7 +142,7 @@ const clean = () => rmSync(tmp, { recursive: true, force: true })
   const disposer = H.apply(ctx, { dataDir, memoryRoot: tmp, transport, llmCanSwitch: true, modelCanSaveKey: true })
 
   ok(typeof disposer === 'function', 'E1 apply 返回可释放函数（返数组会被 web 组合判 Invalid effect）')
-  ok(regs.length === 3 && regs.map((t) => t.name).join(',') === 'memoryos_status,memoryos_switch,memoryos_setup', 'E2 三工具：读状态 / 切开关 / 做配置动作')
+  ok(regs.length === 4 && regs.map((t) => t.name).join(',') === 'memoryos_status,memoryos_switch,memoryos_setup,memoryos_surface', 'E2 四工具：状态／切开关／配置动作／资料面')
   ok(logs.some((l) => /就位/.test(l)) && !logs.some((l) => l.startsWith('W:')), 'E3 装载留一行日志且自检零告警（登记表／探针同源／路由对账三查）')
   ok(child.length === 1 && typeof child[0] === 'function', 'E4 webServer 走 ctx.inject 延迟挂载（顶层 inject 会让 headless 整个插件永挂）')
   ok(routes.some((r) => r.kind === 'prefix' && r.path === A.PREFIX), 'E5 有 prefix 兜底（未知子路径必须回 JSON 404，不能掉进 SPA 回落返回 HTML）')
@@ -284,6 +285,17 @@ const clean = () => rmSync(tmp, { recursive: true, force: true })
   ok(hard.length === 0, `G10 颜色只用主题 token（违规 ${hard.length} 处：${hard.join(' ')}）`)
   ok(!/selfevolve/i.test(code), 'G11 代码里不夹带别家项目标识符（包名／前缀／槽 id／日志前缀都得是自己的）')
   ok(/waiting|待配置/.test(src), 'G12 面板认得「待配置」这一档（配置型功能的状态显示）')
+  // 资料面页：函数在、分支在、用的字段必须是快照真给的（点了空白＝最难查的静默失败）
+  const sv = (/function Surface\(props\) \{([\s\S]*?)\n\t\t\}/.exec(src) || ['', ''])[1]
+  ok(sv.length > 500, 'G14b 资料面页组件成形')
+  ok(/else if \(tab === "surface"\) body = Surface\(/.test(src), 'G14c 页签分支接得上（有组件没分支＝点了没反应）')
+  const surfaceKeys = ['exts', 'prune', 'roots', 'excludes', 'totals', 'ledger', 'hint']
+  const svUnused = surfaceKeys.filter((k) => !new RegExp(`s\\.${k}`).test(sv))
+  ok(svUnused.length === 0, `G14d 资料面页把快照给的字段都用上了（没用：${svUnused.join(' ')}）`)
+  const realOpsAnywhere = new Set([...readFileSync(path.join(PKG, 'index.js'), 'utf8').matchAll(/op === '([a-z-]+)'/g)].map((m) => m[1]))
+  const svOps = new Set([...sv.matchAll(/op:\s*"([a-z-]+)"/g)].map((m) => m[1]))
+  const svBadOps = [...svOps].filter((o) => !realOpsAnywhere.has(o))
+  ok(svOps.has('add-root') && svBadOps.length === 0, `G14e 面板发的每个 op 代码都认（不认：${svBadOps.join(' ')}）`)
   new Function(src)
   ok(true, 'G13 语法自检通过（一个多余括号＝loaded without registering，设置页静默没那一项）')
 
@@ -312,6 +324,114 @@ const clean = () => rmSync(tmp, { recursive: true, force: true })
   ok(['index.js', 'client.js', 'lib', 'package.json', 'cordis.patch.yml'].every((x) => pkgJson.files.includes(x)), 'G22 files 含五件套（漏 patch／漏 package.json＝装不上或面板不出现）')
 }
 
+// ————————————————————————————————— L 资料面：管到哪些目录、排掉哪些子目录与文件
+{
+  const nrm = (p) => String(p).replace(/\\/g, '/').replace(/\/+$/, '')
+  const surf = path.join(tmp, 'surf')
+  const root = path.join(surf, 'notes')
+  const base = path.join(surf, 'baseline')
+  for (const d of [root, base, path.join(root, 'drafts'), path.join(root, 'drafts-old'), path.join(root, 'archive', 'y2024'), path.join(root, 'node_modules', 'pkg')]) mkdirSync(d, { recursive: true })
+  writeFileSync(path.join(root, 'a.md'), '# a', 'utf8')
+  writeFileSync(path.join(root, 'todo.md'), '# t', 'utf8')
+  writeFileSync(path.join(root, 'x.txt'), 'txt 不在管理类型内', 'utf8')
+  writeFileSync(path.join(root, 'drafts', 'd1.md'), '# d1', 'utf8')
+  writeFileSync(path.join(root, 'drafts', 'd2.draft.md'), '# d2', 'utf8')
+  writeFileSync(path.join(root, 'drafts-old', 'keep.md'), '# keep', 'utf8')
+  writeFileSync(path.join(root, 'archive', 'y2024', 'old.md'), '# old', 'utf8')
+  writeFileSync(path.join(root, 'node_modules', 'pkg', 'readme.md'), '# noise', 'utf8')
+  const cfgS = { dataDir: path.join(surf, 'state'), memoryRoots: [base], legacyKeyFiles: [] }
+
+  // —— 排除语义（用户点名要的能力：具体子目录 + 具体文件）
+  ok(V.matchExclude('drafts/d1.md', 'x/drafts/d1.md', 'drafts/'), 'L1 「drafts/」挡住根下那个子树')
+  ok(!V.matchExclude('drafts-old/keep.md', 'x/drafts-old/keep.md', 'drafts/'), 'L2 「drafts/」不误伤 drafts-old/（前缀边界）')
+  ok(V.matchExclude('deep/inner/todo.md', 'x/deep/inner/todo.md', 'todo.md'), 'L3 「todo.md」挡住任意层级的同名文件')
+  ok(V.matchExclude('drafts/d2.draft.md', 'x/drafts/d2.draft.md', '*.draft.md'), 'L4 「*.draft.md」按命名模式挡')
+  ok(V.matchExclude('archive/y2024/old.md', 'x/archive/y2024/old.md', 'archive/**'), 'L5 「archive/**」挡住整棵子树（跨层）')
+  ok(V.matchExclude('a.md', nrm(root) + '/a.md', nrm(root)), 'L6 给绝对路径也挡得住（同一入口两种口径）')
+  ok(!V.matchExclude('a.md', nrm(root) + '/a.md', 'b.md'), 'L7 不相干的规则不乱挡')
+  ok(V.badPattern('*') !== '' && V.badPattern('**') !== '' && V.badPattern('a') !== '', 'L8 一把梭／过短规则直接拒（否则等于悄悄关掉资料面）')
+  ok(V.badPattern('notes/drafts/') === '' && V.badPattern('*.draft.md') === '', 'L9 正常写法放行')
+
+  // —— 目录校验与并集来源
+  const f0 = V.foldSurface(cfgS.dataDir)
+  ok(V.badRoot('nope-dir-xyz', cfgS, f0).includes('不存在'), 'L10 不存在的目录不给纳入')
+  ok(V.badRoot(path.join(root, 'a.md'), cfgS, f0).includes('不是目录'), 'L11 指到文件上不给纳入（提示怎么办）')
+  ok(V.badRoot(base, cfgS, f0).includes('profile 基线'), 'L12 与 profile 基线重复 ⇒ 拒')
+  const er0 = V.effectiveRoots(cfgS, f0)
+  ok(er0.length === 1 && er0[0].source === 'profile' && er0[0].removable === false, 'L13 profile 基线＝只读一行（面板不删宿主配置）')
+  V.appendSurface(cfgS.dataDir, { op: 'add-root', path: nrm(root), by: 'user' })
+  const er1 = V.effectiveRoots(cfgS, V.foldSurface(cfgS.dataDir))
+  ok(er1.length === 2 && er1[1].source === 'ledger' && er1[1].removable === true, 'L14 面板加的根＝并集增量，来源可辨、可移除')
+  V.appendSurface(cfgS.dataDir, { op: 'add-root', path: nrm(root), by: 'llm' })
+  ok(V.effectiveRoots(cfgS, V.foldSurface(cfgS.dataDir)).length === 2, 'L15 重复添加同一目录不产生第二个根')
+
+  // —— 扫描与视图（只数文件名，不读内容）
+  const sc0 = V.scanRoot(root, { excludes: [], cap: 400 })
+  ok(sc0.matched === 6 && !sc0.samples.some((p) => p.includes('node_modules')), `L16 只数 .md 且跳过 node_modules（实测 ${sc0.matched} 个）`)
+  const sc1 = V.scanRoot(root, { excludes: [{ pattern: 'drafts/' }], cap: 400 })
+  ok(sc1.matched === 4 && sc1.excluded === 2 && sc1.byRule['drafts/'] === 2, 'L17 排除子目录后：纳管数下降、归因到具体规则')
+  ok(sc1.samples.every((p) => !p.startsWith('drafts/')), 'L18 样本里不再出现被挡路径（面板不许拿被排除的文件充数）')
+  const view = V.surfaceView(cfgS, V.foldSurface(cfgS.dataDir), { cap: 400 })
+  ok(view.exts.join(',') === '.md' && /固定/.test(view.hint), 'L19 文件类型固定 .md，并带"要管别的类型怎么办"的提示语')
+  ok(view.roots.length === 2 && view.totals.dirsMissing === 0 && view.roots[1].path === nrm(root), 'L20 视图列出每根（含来源与计数）')
+  const pv = V.preview(cfgS, V.foldSurface(cfgS.dataDir), 'archive/**', { cap: 400 })
+  ok(pv.ok && pv.total === 1 && /会挡住 1 个/.test(pv.message), 'L21 试算＝先看清会挡什么，再决定落账')
+  const pv0 = V.preview(cfgS, V.foldSurface(cfgS.dataDir), 'nope/**', { cap: 400 })
+  ok(pv0.ok && pv0.total === 0 && /一个 .md 都挡不到/.test(pv0.message), 'L22 试算挡不到 ⇒ 明说"多半路径写错"，不加了才知道')
+
+  // —— 探针必须用「生效根并集」（否则面板加了根还说没根）
+  const b1 = P.makeProbes({ ...cfgS, rootsOf: () => V.effectiveRoots(cfgS, V.foldSurface(cfgS.dataDir)).map((r) => r.path) }, { webserver: true })
+  ok(P.probeAll(b1)['memory-root'] === true, 'L23 只有面板加的根也算数（依赖探针走并集）')
+  const b2 = P.makeProbes({ ...cfgS, rootsOf: () => [] }, { webserver: true })
+  ok(/profile|资料面/.test(P.probeAll(b2)['memory-root']), 'L24 一个根都没有时探针直接指路（改 profile 或用面板）')
+
+  // —— HTTP 与工具层（面板/模型同一个 writeSurface）
+  const regs2 = [], routes2 = []
+  const sub2 = {
+    get: (x) => (x === 'webServer' ? { register: (r) => { routes2.push(r); return () => {} } } : undefined),
+    logger: { info() {}, warn() {} }, tools: { register: (t) => { regs2.push(t); return () => {} } },
+  }
+  const dirS = path.join(surf, 'hoststate')
+  const disposerS = H.apply({ logger: sub2.logger, tools: sub2.tools, get: sub2.get, inject: (_d, cb) => cb(sub2) },
+    { dataDir: dirS, memoryRoot: base, transport: async () => ({ status: 200, text: '{"answers":{"probe":{"choice":"big","confidence":0.9}}}' }) })
+  const post2 = (p, body) => new Promise((res) => {
+    const route = routes2.find((r) => r.path === A.PREFIX + p)
+    const req = { on: (ev, fn) => { if (ev === 'data') fn(JSON.stringify(body || {})); if (ev === 'end') fn() }, destroy() {} }
+    const rr = { writeHead: (c) => { rr.code = c }, end: (s) => res({ code: rr.code, body: JSON.parse(s) }) }
+    route.handler(req, rr)
+  })
+  const surfOf = (r) => r.body.snapshot.surface
+  ok(surfOf(await post2('/snapshot')).roots.length === 1, 'L25 起步：只有 profile 基线一个根')
+  const add1 = await post2('/surface', { op: 'add-root', path: nrm(root) })
+  ok(add1.code === 200 && surfOf(add1).roots.length === 2 && surfOf(add1).totals.managed > 0, 'L26 面板加目录 ⇒ 立刻进快照并数到文件（不用重启）')
+  const star = await post2('/surface', { op: 'add-exclude', pattern: '*' })
+  ok(star.code === 400 && /整个资料面/.test(star.body.message), 'L27 面板想"排除一切"被拒（这条会静默清空资料面）')
+  const typo = await post2('/surface', { op: 'add-exclude', pattern: 'nope/**' })
+  ok(typo.code === 400 && /挡不到/.test(typo.body.message), 'L28 写错的排除规则加不上（试算挡不到＝拒绝，不留下"以为排除了"的错觉）')
+  const before = surfOf(await post2('/surface', { op: 'preview', pattern: 'drafts/' })).totals.managed
+  const ex1 = await post2('/surface', { op: 'add-exclude', pattern: 'drafts/', reason: '草稿不算资料' })
+  ok(ex1.code === 200 && surfOf(ex1).totals.managed === before - 2 && surfOf(ex1).excludes[0].hits === 2, 'L29 排除子目录生效且有归因计数（hits＝这条挡了几个）')
+  ok(surfOf(await post2('/snapshot')).roots.find((r) => r.path === nrm(base)).removable === false, 'L30 基线根在面板上是只读行（不可移除）')
+  const dropBase = await post2('/surface', { op: 'drop-root', path: nrm(base) })
+  ok(dropBase.code === 400 && /profile/.test(dropBase.body.message), 'L31 试图从面板删 profile 基线 ⇒ 拒并告知改哪')
+  const unex = await post2('/surface', { op: 'drop-exclude', pattern: 'drafts/' })
+  ok(unex.code === 200 && surfOf(unex).totals.managed === before && surfOf(unex).excludes.length === 0, 'L32 解除排除 ⇒ 文件回到管理范围（计数复原，历史仍在账上）')
+  const surfTool = regs2.find((t) => t.name === 'memoryos_surface')
+  const noWhy = await surfTool.execute({ action: 'add-exclude', pattern: 'todo.md' })
+  ok(/reason|理由/.test(noWhy.text), 'L33 模型改资料面不写理由 ⇒ 拒（与切开关同纪律）')
+  const ls = await surfTool.execute({ action: 'list' })
+  ok(/纳管/.test(ls.text) && /排除规则/.test(ls.text) && /\.md/.test(ls.text), 'L34 模型能读到资料面现状（含类型固定的提示）')
+  const badDrop = await surfTool.execute({ action: 'drop-root', path: nrm(base), reason: '我以为是垃圾' })
+  ok(/✗ 拒绝/.test(badDrop.text), 'L35 模型也删不掉 profile 基线（宿主配置不由插件代写）')
+  const ledgerS = readFileSync(path.join(dirS, 'surface.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l))
+  ok(ledgerS.map((r) => r.op).join(',') === 'add-root,add-exclude,drop-exclude',
+    `L36 账本精确等于"真发生过"的三次操作（被拒的 4 次一行都没落）：${ledgerS.map((r) => r.op).join(',')}`)
+  ok(ledgerS.every((r) => r.op && r.ts && r.by === 'user' && (!r.pattern || r.pattern === 'drafts/')), 'L37 每行都有 op/by/ts，且没有一条是垃圾规则')
+  ok(ledgerS.find((r) => r.pattern === 'drafts/').reason === '草稿不算资料' && ledgerS.filter((r) => /未填理由/.test(r.reason)).length === 2,
+    'L38 填过的理由存原文，没填的存占位（事后分得清"这句是谁说的"，不含糊）')
+  disposerS()
+}
+
 // ————————————————————————————————— K 文档与代码对账（四份文档最容易坏在漂移，让它当场变红）
 {
   const idx = readFileSync(path.join(PKG, 'index.js'), 'utf8')
@@ -327,13 +447,22 @@ const clean = () => rmSync(tmp, { recursive: true, force: true })
   ok(leak.length === 0, `K1 文档不夹带维护者本机私货（命中 ${leak.length}：${[...new Set(leak)].join(' ')}）`)
 
   // K2 文档里出现的工具名必须是真注册的
-  const realTools = new Set(['memoryos_status', 'memoryos_switch', 'memoryos_setup'])
+  // 真实工具名从代码里抽（手抄清单自己就会漂移——本轮 K2 当场抓到这件事）
+  const realTools = new Set([...idx.matchAll(/name: '(memoryos_[a-z]+)'/g)].map((m) => m[1]))
   const named = new Set((all.match(/memoryos_[a-z-]+/g) || []).map((s) => s.replace(/-+$/, '')))
   const ghost = [...named].filter((x) => !realTools.has(x))
-  ok(ghost.length === 0, `K2 文档提到的工具都真实存在（幽灵：${ghost.join(' ')}）`)
+  ok(realTools.size === 4 && [...realTools].sort().join(',') === 'memoryos_setup,memoryos_status,memoryos_surface,memoryos_switch',
+    `K2a 代码注册的工具正好四个（抽到 ${realTools.size}：${[...realTools].sort().join(' ')}）——加第五个工具没同步文档就拦在这里`)
+  ok(ghost.length === 0, `K2b 文档提到的工具都真实存在（幽灵：${ghost.join(' ')}）`)
 
   // K3 setup 的 action 名与代码分支同源
-  const realActions = new Set(['probe', 'save-key', 'where-key', 'list'])
+  // action/op 名也从代码分支里抽（同样是"手抄清单会漂移"的教训）
+  const realActions = new Set([
+    ...[...idx.matchAll(/action === '([a-z-]+)'/g)].map((m) => m[1]),
+    ...[...idx.matchAll(/op === '([a-z-]+)'/g)].map((m) => m[1]),
+  ])
+  ok(realActions.has('probe') && realActions.has('save-key') && realActions.has('add-exclude') && realActions.has('preview'),
+    `K3c 代码分支抽出的动作齐全（${[...realActions].join(' ')}）`)
   const inDocs = (docs['docs/AGENT-GUIDE.md'].match(/action:\s*'([a-z-]+)'/) || [])[1]
   ok(inDocs === 'probe' || inDocs === undefined, `K3a 示例 action 合法（${inDocs}）`)
   const mentioned = new Set((all.match(/action='([a-z-]+)'/g) || []).map((s) => /'([a-z-]+)'/.exec(s)[1]))
@@ -352,11 +481,11 @@ const clean = () => rmSync(tmp, { recursive: true, force: true })
   ok(unknown.length === 0, `K4b §7 每个配置键都被 readCfg 真读（未识别：${unknown.join(' ')}）`)
   const missing = [...cfgKeys].filter((k) => !listed.includes(k))
   ok(missing.length === 0, `K4c 反向也对账：readCfg 读的键都写进了文档（漏文档：${missing.join(' ')}）`)
-  // K5 状态六档与实现计数对得上（文档说"未实现 5"，代码就得正好 5 个 todo）
+  // K5 概览计数与登记表一致（新增功能忘了同步文档 ⇒ 当场红）
   const todoN = F.FEATURES.filter((f) => f.impl === 'todo').length
-  const liveN = F.FEATURES.filter((f) => f.impl !== 'todo').length
-  ok(/未实现 5/.test(docs['docs/WORKFLOW.md']) === (todoN === 5) && /生效中 3/.test(docs['docs/WORKFLOW.md']),
-    `K5 概览计数与登记表一致（live=${liveN}，todo=${todoN}）`)
+  const onN = F.FEATURES.filter((f) => f.impl !== 'todo' && f.default).length
+  ok(new RegExp(`生效中 ${onN}`).test(docs['docs/WORKFLOW.md']) && new RegExp(`未实现 ${todoN}`).test(docs['docs/WORKFLOW.md']),
+    `K5 文档概览计数与登记表一致（应为 生效中 ${onN}／未实现 ${todoN}）`)
   ok(['on', 'off', 'waiting', 'degraded', 'unavailable', 'planned'].every((s) => new RegExp(`\`?${s}\`?`).test(docs['docs/DESIGN.md'])),
     'K6 六档状态在设计文档里都有定义（新增档必须写进来，否则面板中文无处可查）')
 

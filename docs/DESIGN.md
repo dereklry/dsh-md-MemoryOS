@@ -1,4 +1,4 @@
-# 插件设计说明（Architecture & Contract）
+﻿# 插件设计说明（Architecture & Contract）
 
 > 面向要读代码、改代码、扩展功能的人。**为什么这么设计（判断与踩坑）**在 `JUDGMENTS.md`，**模型该怎么用**在 `AGENT-GUIDE.md`，**一天怎么转**在 `WORKFLOW.md`。
 > 本文只写"系统实际长什么样"，与代码逐字对齐；不一致视为缺陷（闸会抓几处，其余靠人）。
@@ -17,6 +17,7 @@
 | `health` | user | **live** | 状态与依赖体检（每行现算） |
 | `switch-ledger` | user | **live** | append-only 开关账本 |
 | `jev-engine` | llm | **live** | 配置型样板：Key 到位 → 测通 → 才置生效 |
+| `surface-admin` | user | **live** | 资料面管理：看/改管理范围（只数文件名，不读内容） |
 | `radar` | both | todo | 资料亮起（每回合匹配资料并亮给模型） |
 | `graph-search` | both | todo | 指针图检索（词→文件/行，本地零账） |
 | `scaffold` | user | todo | 首次建档（四层骨架 + 资料表初稿） |
@@ -39,8 +40,9 @@ lib/switches.js       开关账本 + 写侧权限 mayWrite() + 生效值三层 +
 lib/setup.js          配置账本 + Jev 测通（node:https，transport 可注入）+ 掩码
 lib/probes.js         依赖探针 / 步骤探针（纯本地 fs/env，5 秒 TTL，绝不起进程）
 lib/keystore.js       Key 落点：宿主凭据面优先 + git 工作树守卫 + 掩码；明文只在本机内存过一下
+lib/surface.js         资料面登记（目录并集、排除匹配、扫描计数、试算）
 lib/api.js            面板 HTTP 面（延迟挂载 + prefix JSON 404 兜底 + 写后回快照）
-test/load.js          离线闸（105 条，零网络）
+test/load.js          离线闸（零网络；条数看输出末行）
 test/stub-dsh-tools.mjs  宿主 dsh-tools 的恒等替身（让闸不依赖 DSH 安装）
 ```
 
@@ -48,9 +50,9 @@ test/stub-dsh-tools.mjs  宿主 dsh-tools 的恒等替身（让闸不依赖 DSH 
 
 ---
 
-## 3. 数据模型（盘上只有两本账）
+## 3. 数据模型（盘上只有三本账，都是 append-only JSONL）
 
-两本都是 **append-only JSONL**：一次操作＝一行，历史永不改写；读侧 fold 取每键最新行，坏行跳过并计数（fail-open：账本坏不拖垮功能）。
+三本都是 **append-only JSONL**：一次操作＝一行，历史永不改写；读侧 fold 取每键最新行，坏行跳过并计数（fail-open：账本坏不拖垮功能）。
 
 ### 3.1 `<dataDir>/switches.jsonl` —— 谁切的
 
@@ -77,6 +79,31 @@ test/stub-dsh-tools.mjs  宿主 dsh-tools 的恒等替身（让闸不依赖 DSH 
 `step` 的取值＝登记表 `STEPS` 的键。测通类步骤有**时效**（`setupFreshDays`，默认 7 天）：过期即视为未满足，功能状态自动回退成「待配置」。
 
 **明文 Key 不进任何一本账**，只进 `masked`（长度 + 头尾几位）。
+
+### 3.3 `<dataDir>/surface.jsonl` —— 资料面（管到哪儿）
+
+```json
+{"op":"add-root","path":"D:/notes","by":"user","ts":"…"}
+{"op":"add-exclude","pattern":"notes/drafts/","by":"user","reason":"草稿不算资料","ts":"…"}
+{"op":"drop-exclude","pattern":"todo.md","by":"llm","reason":"用户改主意","ts":"…"}
+```
+
+| `op` | 参数字段 | 语义 |
+|---|---|---|
+| `add-root` / `drop-root` | `path` | 增删**增量根**。生效根＝`config.memoryRoot` 基线 ∪ 这里的增量；**基线不可被删**（那是宿主配置，改了要重启） |
+| `add-exclude` / `drop-exclude` | `pattern` | 增删排除规则。匹配**双口径**：相对根的路径 ＋ 绝对路径 |
+
+排除写法（覆盖到"具体子目录 + 具体文件"）：
+
+| 写法 | 挡什么 |
+|---|---|
+| `notes/drafts/` | 某根下那个子树（且**不误伤** `notes/drafts-old/`——前缀按路径段边界比较） |
+| `todo.md` | 任意层级的同名文件 |
+| `*.draft.md` | 命名模式（`*` 不跨 `/`） |
+| `archive/**` | 跨层子树 |
+| `/abs/path/x.md` | 绝对路径（同一入口两种口径都试） |
+
+三条实现纪律：**`*`／`**`／少于 3 个实字符的规则一律拒**（那等于悄悄清空资料面）；**加排除前先试算**（`preview`，挡不到一个文件就拒绝落账，避免"以为排除了"）；**profile 基线只读**（插件不代写宿主配置）。
 
 ---
 
@@ -137,6 +164,7 @@ test/stub-dsh-tools.mjs  宿主 dsh-tools 的恒等替身（让闸不依赖 DSH 
 | `POST /switch` | `{feature,value,reason?}` | 用户切开关（不填理由也放行——面板是主人） |
 | `POST /takeover` | `{feature,value}` | 写 `lock:true`（接管，模型出局） |
 | `POST /release` | `{feature,value}` | 写 `lock:false`（解除接管） |
+| `POST /surface` | `{op,path\|pattern,reason?}` | 资料面：`add-root`/`drop-root`/`add-exclude`/`drop-exclude`/`preview`（与模型工具同一个 `writeSurface`） |
 | 前缀下其它路径 | — | **JSON 404**（不能掉进宿主 SPA 回落返回 HTML） |
 
 写成功返回 `{ok,message,snapshot}`（省一次往返，也保证"点了就看到变化"）；业务拒绝返回 **HTTP 400 + message**，面板原样显示不粉饰。
@@ -149,22 +177,25 @@ test/stub-dsh-tools.mjs  宿主 dsh-tools 的恒等替身（让闸不依赖 DSH 
 { features[], byGroup{组:feature[]}, ledger[], ledgerMeta{file,exists,corrupt,lines},
   setup[], setupMeta{file,exists,corrupt,freshDays},
   deps[{id,label,hard,note,result}],                       ← result:true 或"缺什么"的人话
+  surface{exts[],prune[],roots[{path,source,removable,by,ts,exists,matched,capped,excluded,byRule{},samples[]}],
+          excludes[{pattern,by,ts,hits}],totals{roots,dirsMissing,managed,hidden,capped},ledger{file,lines,corrupt},hint},
   meta{pkg,version,dataDir,llmCanSwitch,modelCanSaveKey,
        key{present,ref,from,via,path,writable,masked,warnings[],hint},
        configHints{memoryRoot[],pythonBin,graphDb,kernelRepo,keyFile,baseUrl,allowKeyInRepo}} }
 ```
 
-### 6.3 模型工具（三个）
+### 6.3 模型工具（四个）
 
 | 工具 | 参数 | 返回 |
 |---|---|---|
-| `memoryos_status` | `feature?` | 每个功能一行：状态／控制器／谁定的＋理由＋时间／缺依赖／待办／成本；含账本路径与 Key 位置（掩码） |
+| `memoryos_status` | `feature?` | 每个功能一行：状态／控制器／谁定的＋理由＋时间／缺依赖／待办／成本；含账本路径、Key 位置（掩码）与资料面计数 |
 | `memoryos_switch` | `feature`,`value:'on'|'off'`,`reason`（必填） | `✓ 已记一行…` / `✗ 拒绝：<原因>`；开了配置型功能会附"仍差 N 步，面板显示待配置" |
 | `memoryos_setup` | `action:'probe'|'save-key'|'where-key'|'list'`,`reason`（必填）,`feature?`,`key?`,`path?`,`allow_in_repo?` | 测通结果（含延迟与上游摘要）／代存落点与掩码／当前 Key 在哪／配置账本与待办 |
+| `memoryos_surface` | `action:'list'|'add-root'|'drop-root'|'add-exclude'|'drop-exclude'|'preview'`,`path?`,`pattern?`,`reason`（写操作必填） | 资料面现状（每根纳管多少 `.md`、被哪条规则挡多少、样本路径）／增删目录与排除／试算。删 `profile` 基线会被拒；`.md` 之外的类型不放开 |
 
 ### 6.4 面板（`settings.section`，`id:'memoryos'`，`order:120`，label「记忆系统」）
 
-四个页签：**功能开关**（按组分块，每行状态徽章＋谁定的＋成本＋待办步骤＋缺依赖＋操作）／**概览**（统计与两种控制权解释）／**依赖与路径**（探针表 + config 落点）／**账本**（开关账＋配置账两张表）。
+五个页签：**功能开关**（按组分块，每行＝状态徽章＋谁能操作＋谁定的＋成本＋待办步骤＋缺依赖＋操作）、**资料面**（当前管理范围的目录清单＋排除规则与"这条挡了几个"＋固定的文件类型与提示语）、**概览**（统计与两种控制权解释）、**依赖与路径**（探针表＋config 落点）、**账本**（开关账／配置账两张表）。
 
 取数节奏：挂载读一次 ＋ 右上「刷新」＋ 写后吃返回快照；**不轮询、不缓存**。
 
@@ -183,6 +214,7 @@ test/stub-dsh-tools.mjs  宿主 dsh-tools 的恒等替身（让闸不依赖 DSH 
 | `graphDb` | `MEMORYOS_GRAPH` | 指针图库路径（默认在记忆根下找 `ledger_graph.db`） |
 | `graphStaleDays` | — | 图水位超过几天算降级 |
 | `ledgerTail` | — | 面板账本页显示多少行 |
+| `scanCap` | — | 资料面每根**最多数到多少个文件**就停（默认 400；面板要秒开，建索引是另一件事） |
 | `keyFile` | `JEV_KEY_FILE` | Key 文件位（凭据面之后、数据目录之前） |
 | `legacyKeyFiles` | — | 旧位置只读兼容（读到即标警） |
 | `baseUrl` / `model` / `probeTimeoutMs` | `JEV_BASE_URL` / `JEV_MODEL` | 测通用的上游与超时 |
@@ -236,7 +268,7 @@ test/stub-dsh-tools.mjs  宿主 dsh-tools 的恒等替身（让闸不依赖 DSH 
    - 新器官先写 `impl:'todo'` 也能进表——面板会灰显、不给按钮，等代码搬进来改 `live`。
 2. 用了新依赖 → 在 `DEPS` 加一项（`label/hard/note`）**并**在 `lib/probes.js` 加探针；新前置动作 → 在 `STEPS` 加一项（`label/by/how`）**并**加步骤探针。`DEPS↔探针`、`STEPS↔步骤探针` 双向同源，闸会红。
 3. 器官自己在热路径上调 `effectiveValue()/deriveState()`（或直接读快照的布尔），**不要**自己造一份开关判断逻辑——两套规则必然分叉。
-4. 跑 `node test/load.js`（105 条）＋ `node --check client.js`（若动了面板）。
+4. 跑 `node test/load.js`（条数看末行）＋ `node --check client.js`（若动了面板）。
 5. 装到本机的动作按宿主侧上线流程走（预检 → 装载面 → 判生效只认 `Tool.listTools` → 重启归用户）。
 
 ---

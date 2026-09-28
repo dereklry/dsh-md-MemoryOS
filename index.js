@@ -1,4 +1,4 @@
-/**
+﻿/**
  * dsh-md-MemoryOS · Host 半
  *
  * 只做接线，口径全在 lib/：
@@ -21,6 +21,10 @@ import { foldLedger, appendSwitch, effectiveValue, deriveState, mayWrite, switch
 import { makeProbes, probeAll, stepAll, envOf } from './lib/probes.js'
 import { foldSetup, recordSetup, probeJev } from './lib/setup.js'
 import { makeKeystore, KEY_REF } from './lib/keystore.js'
+import { foldSurface, appendSurface, surfaceView, effectiveRoots, badRoot, badPattern, preview, MANAGED_EXTS } from './lib/surface.js'
+
+/** 路径归一（账本与提示都用正斜杠、去尾斜杠；只用于比较与显示，不改写用户传入的原样值） */
+const normPath = (p) => String(p || '').trim().replace(/\\/g, '/').replace(/\/+$/, '')
 import { createApi } from './lib/api.js'
 
 export const name = 'dsh-md-MemoryOS'
@@ -44,6 +48,8 @@ export function readCfg(config) {
     setupFreshDays: Number(c.setupFreshDays) > 0 ? Number(c.setupFreshDays) : 7,
     staleDays: Number(c.graphStaleDays) > 0 ? Number(c.graphStaleDays) : 7,
     ledgerTail: Number(c.ledgerTail) > 0 ? Number(c.ledgerTail) : 40,
+    // 资料面扫描上限：只数文件名，命中即停（面板刷新要便宜，索引是另一件事）
+    scanCap: Number(c.scanCap) > 0 ? Number(c.scanCap) : 400,
     cfgDefaults: c.defaults && typeof c.defaults === 'object' ? c.defaults : {},
     llmCanSwitch: c.llmCanSwitch !== false,
     modelCanSaveKey: c.modelCanSaveKey !== false,
@@ -63,6 +69,8 @@ export function apply(ctx, config) {
   const runtime = { webserver: false }
   const log = (m) => { try { ctx.logger ? ctx.logger.info(m) : console.info(m) } catch { /* 日志绝不外抛 */ } }
   const warn = (m) => { try { if (ctx.logger) ctx.logger.warn(m); else console.warn(m) } catch { /* 同上 */ } }
+  // 生效记忆根＝profile 基线 ∪ 资料面账本增量（探针与扫描都走这一个口径，别留两份真相）
+  cfg.rootsOf = () => effectiveRoots(cfg, foldSurface(cfg.dataDir)).map((r) => r.path)
   const bundle = makeProbes(cfg, runtime, { setupFreshDays: cfg.setupFreshDays })
   const keys = makeKeystore({ cfg, warn })
   const JEY_STEP = 'jev-key' // STEPS 里的 id（凭据面结果覆盖它）
@@ -118,6 +126,8 @@ export function apply(ctx, config) {
       setup: [...setup.rows.values()].reverse().slice(0, Math.max(1, limit || cfg.ledgerTail)),
       setupMeta: { file: setup.file, exists: existsSync(setup.file), corrupt: setup.corrupt, freshDays: cfg.setupFreshDays },
       deps: Object.keys(DEPS).map((id) => ({ id, ...DEPS[id], result: deps[id] })),
+      // 资料面＝管理范围内的目录与文件类型（面板「资料面」页与 memoryos_surface 共用这一份）
+      surface: surfaceView(cfg, foldSurface(cfg.dataDir), { cap: cfg.scanCap }),
       meta: {
         pkg: name, version: pkgVersion(), dataDir: cfg.dataDir,
         llmCanSwitch: cfg.llmCanSwitch, modelCanSaveKey: cfg.modelCanSaveKey,
@@ -162,6 +172,56 @@ export function apply(ctx, config) {
       if (left.length) extra = `｜仍差 ${left.length} 步（${left.map((s) => STEPS[s].label).join('、')}），面板显示「待配置」，不算生效`
     }
     return { ok: true, message: `已记一行：${f.id}=${row.value ? 'on' : 'off'}（${by === 'llm' ? '模型决定' : '用户'}${row.lock === true ? ' · 已接管锁定' : row.lock === false ? ' · 已解除接管' : ''}）${extra}`, row }
+  }
+
+  // ---------------------------------------------------------------- 资料面写入口（面板与模型同一个函数）
+  function writeSurface(input) {
+    const body = input || {}
+    const by = body.by === 'llm' ? 'llm' : 'user'
+    const op = String(body.op || body.action || '').trim().toLowerCase()
+    const raw = String(body.reason || '').trim()
+    if (by === 'llm' && !raw) return { ok: false, message: '模型改资料面必须写 reason（面板要显示是谁、为什么纳入了这个目录）' }
+    const reason = raw || '（用户未填理由）'
+    const folded = foldSurface(cfg.dataDir)
+    if (op === 'add-root') {
+      const why = badRoot(body.path, cfg, folded)
+      if (why) return { ok: false, message: `不能纳入：${why}` }
+      appendSurface(cfg.dataDir, { op: 'add-root', path: expandHome(String(body.path).trim()), by, reason })
+      bundle.invalidate()
+      return { ok: true, message: `已纳入管理范围：${normPath(body.path)}（只数 ${MANAGED_EXTS.join('/')} 文件名，被排除规则挡住的不在内）` }
+    }
+    if (op === 'drop-root') {
+      const k = normPath(body.path).toLowerCase()
+      if ((cfg.memoryRoots || []).some((r) => normPath(r).toLowerCase() === k)) {
+        return { ok: false, message: '这是 profile 基线的记忆根，面板与工具都不删它——要改请改 profile 的 config.memoryRoot（改了要重启）' }
+      }
+      if (!folded.roots.some((r) => normPath(r.path).toLowerCase() === k)) return { ok: false, message: `管理范围里没有这个目录：${body.path}` }
+      appendSurface(cfg.dataDir, { op: 'drop-root', path: normPath(body.path), by, reason })
+      bundle.invalidate()
+      return { ok: true, message: `已移出管理范围：${normPath(body.path)}（账本留一行历史，谁加的什么时候加的都能查）` }
+    }
+    if (op === 'add-exclude') {
+      const why = badPattern(body.pattern)
+      if (why) return { ok: false, message: why }
+      const pv = preview(cfg, folded, body.pattern, { cap: cfg.scanCap })
+      if (!pv.ok) return { ok: false, message: pv.message }
+      if (pv.total === 0) return { ok: false, message: pv.message + '｜确认要加也行，但请先核对路径写法（相对根：notes/drafts/ 、todo.md 、*.draft.md）' }
+      appendSurface(cfg.dataDir, { op: 'add-exclude', pattern: String(body.pattern).trim(), by, reason })
+      bundle.invalidate()
+      return { ok: true, message: `已加排除规则：${pv.message}` }
+    }
+    if (op === 'drop-exclude') {
+      const p = String(body.pattern || '').trim()
+      if (!folded.excludes.some((e) => e.pattern === p)) return { ok: false, message: `没有这条排除规则：${p}` }
+      appendSurface(cfg.dataDir, { op: 'drop-exclude', pattern: p, by, reason })
+      bundle.invalidate()
+      return { ok: true, message: `已解除排除：${p}（这些文件重新回到管理范围）` }
+    }
+    if (op === 'preview') {
+      const pv = preview(cfg, folded, body.pattern, { cap: cfg.scanCap })
+      return pv.ok ? { ok: true, message: pv.message } : { ok: false, message: pv.message }
+    }
+    return { ok: false, message: `未知操作：${op}（可用 add-root / drop-root / add-exclude / drop-exclude / preview；看现状用 memoryos_surface action=list）` }
   }
 
   // ---------------------------------------------------------------- 配置动作（只有模型走这条路）
@@ -227,7 +287,8 @@ export function apply(ctx, config) {
           const miss = (f.missing || []).length ? `｜缺：${f.missing.map((m) => `${m.label}${m.why ? `（${m.why}）` : ''}`).join(' ')}` : ''
           return `- ${f.id}「${f.label}」＝${ZH[f.state] || f.state}｜${f.controller === 'llm' ? '模型执行' : f.controller === 'user' ? '仅用户可切' : '双方可切'}${f.locked ? '·用户已接管' : ''}｜${who}${pend}${miss}｜成本：${f.cost}`
         })
-        return { text: `MemoryOS ${s.meta.version}｜账本 ${s.meta.dataDir}｜Key=${s.meta.keyPresent ? '在（' + s.meta.keyFrom + '）' : '无'}｜模型可改开关=${s.meta.llmCanSwitch}\n`
+        return { text: `MemoryOS ${s.meta.version}｜账本 ${s.meta.dataDir}｜Key=${s.meta.key.present ? '在位：' + s.meta.key.from + ' ' + s.meta.key.masked : '未配置'}｜模型可改开关=${s.meta.llmCanSwitch}｜资料面=${s.surface.totals.roots} 根 / 纳管 ${s.surface.totals.managed} 文件 / 排除 ${s.surface.totals.hidden}`
+          + (s.meta.key.warnings && s.meta.key.warnings.length ? '\n' + s.meta.key.warnings.map((w) => `⚠ ${w}`).join('\n') : '') + '\n'
           + lines.join('\n')
           + `\n配置账本：${s.setupMeta.file}（${s.setupMeta.exists ? '有' : '还没有'}）；切换账本 ${s.ledgerMeta.lines} 行、坏行 ${s.ledgerMeta.corrupt}`
           + (feature ? '' : '\n口径：状态一律现算不缓存；"待配置"＝该功能开着但前置动作没做完（不算生效）；模型只能动 controller=llm/both 且未被接管的项。') }
@@ -289,10 +350,48 @@ export function apply(ctx, config) {
     },
   }))
 
+  reg(defineTool({
+    name: 'memoryos_surface',
+    description:
+      '查看/调整 MemoryOS 的**资料面**（哪些目录归 OS 管、哪些子目录与文件被排除）。'
+      + 'action=list 看现状（每根纳管多少 .md、被哪条规则挡住多少、样本路径）；add-root/drop-root 增删目录；'
+      + 'add-exclude/drop-exclude 增删排除；preview 先试算一条规则会挡住哪些文件（**加排除规则前建议先 preview**）。'
+      + '排除写法：`notes/drafts/`＝某根下的子树；`todo.md`＝任意层级同名文件；`*.draft.md`＝命名模式；`archive/**`＝跨层子树。'
+      + '两条边界：profile 的 config.memoryRoot 是**只读基线**（这里删不掉，要改就改 profile 并重启）；'
+      + '文件类型本版本固定 .md——**不要**向用户承诺能管别的类型（那要改扫描与索引，见 docs/DESIGN.md）。',
+    parameters: {
+      action: { type: 'string', required: true, description: 'list | add-root | drop-root | add-exclude | drop-exclude | preview' },
+      path: { type: 'string', required: false, description: '目录（add-root/drop-root 必填；绝对路径或 ~ 开头）' },
+      pattern: { type: 'string', required: false, description: '排除规则（add-exclude/drop-exclude/preview 必填）' },
+      reason: { type: 'string', required: false, description: '为什么改（写操作必带，面板会显示"是谁、为什么"）' },
+    },
+    output: { schema: 'text' },
+    async execute(args) {
+      try {
+        const a = String((args && args.action) || 'list').trim().toLowerCase()
+        if (a === 'list') {
+          const s = await buildSnapshot(6)
+          const v = s.surface
+          const lines = v.roots.map((r) => ` - ${r.path}［${r.source === 'profile' ? 'profile 基线·此处不可删' : (r.by === 'llm' ? '模型加' : '面板加')}${r.removable ? '·可移除' : ''}］`
+            + (r.exists ? ` 纳管 ${r.matched}${r.capped ? '+' : ''} 个 .md｜被挡 ${r.excluded}${Object.keys(r.byRule).length ? '｜' + Object.entries(r.byRule).map(([p, c]) => `${p}→${c}`).join(' ') : ''}｜样本 ${(r.samples[0] || '（无命中）')}${r.samples.length > 1 ? ' …' : ''}` : ` ✗ ${r.why || '目录不存在'}`))
+          return { text: `资料面｜类型＝${v.exts.join(' ')}（本版本固定）｜${v.totals.roots} 个根（${v.totals.dirsMissing} 个不存在）｜纳管 ${v.totals.managed} 文件｜被挡 ${v.totals.hidden} 文件${v.totals.capped ? '（有根命中上限，数字带 +）' : ''}\n`
+            + (lines.join('\n') || ' （还没有记忆根：请让用户在 profile 填 config.memoryRoot，或在面板「资料面」页添加目录）')
+            + `\n排除规则：${v.excludes.length ? v.excludes.map((e) => `${e.pattern}（挡 ${e.hits}）`).join(' , ') : '（无）'}`
+            + `\n账本：${v.ledger.file}（${v.ledger.lines} 行）｜${v.hint}` }
+        }
+        const r = writeSurface({ ...args, op: a, by: 'llm' })
+        return { text: r.ok ? `✓ ${r.message}` : `✗ 拒绝：${r.message}` }
+      } catch (e) {
+        return { text: `资料面操作失败：${String((e && e.message) || e)}` }
+      }
+    },
+  }))
+
   // ---------------------------------------------------------------- 面板数据面
   disposers.push(createApi(ctx, {
     snapshot: () => buildSnapshot(),
     write: (body) => writeSwitch({ ...body, by: body && body.by === 'llm' ? 'llm' : 'user' }),
+    surface: (body) => writeSurface({ ...body, by: body && body.by === 'llm' ? 'llm' : 'user' }),
     runtime,
     log,
     warn,
