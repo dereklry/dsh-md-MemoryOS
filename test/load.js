@@ -486,6 +486,22 @@ const clean = () => rmSync(tmp, { recursive: true, force: true })
   const onN = F.FEATURES.filter((f) => f.impl !== 'todo' && f.default).length
   ok(new RegExp(`生效中 ${onN}`).test(docs['docs/WORKFLOW.md']) && new RegExp(`未实现 ${todoN}`).test(docs['docs/WORKFLOW.md']),
     `K5 文档概览计数与登记表一致（应为 生效中 ${onN}／未实现 ${todoN}）`)
+  // K5b/K5c：回路图三要素（2026-09-28 用户点名补的细节，钉成断言，防重写文档时丢掉）
+  const wf = docs['docs/WORKFLOW.md']
+  const loop = (/## 1\. 一条消息的完整回路([\s\S]*?)### 1\.5/.exec(wf) || ['', ''])[1]
+  ok(loop.length > 400 && /②/.test(loop) && /Jev/.test(loop) && /System One/.test(loop),
+    'K5b② 回路第②格写明判定模型＝Jev（System One 一类），不是笼统一句"模型调用"')
+  const missingTools = [...realTools].filter((t) => !loop.includes(t))
+  ok(missingTools.length === 0 && (loop.match(/memoryos_[a-z]+/g) || []).length >= 4,
+    `K5b③ 回路第③格列全 LLM 可调用的工具名（缺：${missingTools.join(' ') || '无'}）`)
+  const s5 = (/├─⑤[\s\S]*?(?=└─⑥)/.exec(loop) || [''])[0]
+  const s6 = (/└─⑥([\s\S]*)$/.exec(loop) || ['', ''])[1]
+  ok(s5.length > 150 && /判路问句文档/.test(s5) && /静默失灵/.test(s5),
+    'K5b⑤ 归档格写明"及时更新 Jev 判路问句文档"，并点出漏更新的后果是静默失灵')
+  ok(s6.length > 100 && /判路问句文档/.test(s6) && /分叉/.test(s6),
+    'K5b⑥ 维护格把"判路文档与资料是否分叉"列为体检目标（与指针图并列）')
+  ok(['漏亮', '错亮', '假工作'].every((w) => wf.includes(w)),
+    'K5c 三种分叉症状都在文档里——不报错的故障必须写下来才有人去查')
   ok(['on', 'off', 'waiting', 'degraded', 'unavailable', 'planned'].every((s) => new RegExp(`\`?${s}\`?`).test(docs['docs/DESIGN.md'])),
     'K6 六档状态在设计文档里都有定义（新增档必须写进来，否则面板中文无处可查）')
 
