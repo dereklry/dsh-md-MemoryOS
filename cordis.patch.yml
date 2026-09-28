@@ -1,0 +1,65 @@
+# dsh-md-MemoryOS bundle patch —— profile 列了本 bundle 时才生效的那一层。
+#
+# 安装（二选一，都在目标机上做，不在本仓里）：
+#   plugin_manager install_bundle → target 指向本仓绝对路径（推荐，会跑装载预检）
+#   或在 profile 目录：pnpm add link:<本仓路径> 然后把包名加进 package.json 的 dsh.profile.bundles
+#
+# 下面所有值都是**示例/留空**：留空＝走代码里的发现链（config > env > 平台默认）。
+# 改完要重启 DSH 才装载（插件不能自己重启自己，重启归用户）。
+- insert:
+    - id: dsh-md-MemoryOS
+      name: 'dsh-md-MemoryOS'
+      config:
+        # ---- 落点 ----
+        # 开关账本与配置账本落点（支持 ~）。留空＝<家目录>/.dsh/memoryos（换机器也可用 env MEMORYOS_DATA）
+        dataDir: ''
+        # 记忆根：要扫描/落账的 md 目录，多个用 ; 分隔。留空＝检索类功能显示「不可用」并告诉你去哪填
+        memoryRoot: ''
+        # Python 解释器：实测内核读面纯标准库，系统 Python 3.9+ 就够，不必建 venv。env MD_PYTHON_BIN 同义
+        pythonBin: ''
+        # 内核仓根（pythonBin 的发现基准）。env MD_REPO_ROOT
+        kernelRepo: ''
+        # 指针图库路径；留空＝在各记忆根下找 ledger_graph.db
+        graphDb: ''
+        # 图水位超过多少天算「降级」（面板会显示天数，提示 rebuild）
+        graphStaleDays: 7
+        # 面板「账本」页显示多少行
+        ledgerTail: 40
+
+        # ---- Key 落点（明文永不进账本/日志/快照，只出现掩码）----
+        # 首选宿主凭据面：~/.dsh/.credentials.yaml 的 ref=JEV_API_KEY（提供方以 0600 + 原子替换 + 文件锁写它）。
+        # 选它的三条理由：① 不在任何 git 工作树里 ⇒ 不存在"忘了 ignore 就推上 GitHub"；
+        #                 ② 在用户目录 ⇒ 不随 app 升级被覆盖（升级动的是安装目录与 profile 组合）；
+        #                 ③ 有 describe() ⇒ 面板能问"配了没有/从哪来/可否写"而无需读明文。
+        # 留空即走发现链：credentials(ref) > env JEV_API_KEY/TYPESAFE_API_KEY > config.keyFile > 数据目录 > legacyKeyFiles
+        keyFile: ''
+        # 旧部署位置兼容读（只读；读到就在面板标警让你搬家）。默认空＝不猜别人机器上的路径。
+        legacyKeyFiles: []
+
+        # ---- 引擎与动作 ----
+        baseUrl: 'https://api.typesafe.ai' # env JEV_BASE_URL 同义
+        model: 'jev-latest'
+        probeTimeoutMs: 6000 # 测通一次请求的超时
+        setupFreshDays: 7 # 测通算"新鲜"的天数：过期→该功能回退成「待配置」，面板提示重测
+
+        # ---- 控制权（谁能改功能开关）----
+        llmCanSwitch: true # false＝只有用户能切，模型调 memoryos_switch 会得到可读拒绝
+        modelCanSaveKey: true # 模型可否代存 Key（优先写凭据面）
+        # 默认 false：写文件时若目标落在某个 .git 工作树内 ⇒ 直接拒。
+        # 真要放仓里就设 true，并自己确认那个仓的 .gitignore 挡住了它（不推荐，等于把安全交给一行文本）。
+        allowKeyInRepo: false
+
+        # ---- 各功能的出厂默认（等价 lib/features.js 的 default，但低于切换账本）----
+        # 每个键＝面板上一行，也是 switches.jsonl 里的 override key（**热生效不重启**）。
+        # 长期改默认动这里；临时改就在面板上切（面板/工具写的都是账本，优先于这里）。
+        # impl=todo 的项（radar/graph-search/scaffold/mining/maintain）现在还不给按钮，先占位。
+        defaults:
+          panel: true # 设置里这一节本身。关掉＝本节从导航消失，只能回这里改 true 恢复
+          health: true # 状态与依赖体检（每行现算：生效中/已关/待配置/降级/不可用/未实现）
+          switch-ledger: true # append-only 开关账本（谁做的、理由、时间）
+          jev-engine: false # 配置型样板：Key 到位 → 测通 → 才置生效；操作由模型执行，面板只显示状态
+          radar: true # 资料亮起：每回合把匹配的资料条目亮给模型（每回合 1 次模型调用，钱在这）
+          graph-search: true # 指针图检索：词→文件/行，本地自算，零账
+          scaffold: false # 首次建档：扫记忆根 → 生成四层骨架 + 资料表初稿（一次性）
+          mining: true # 候选生成：查空的词→别名、反复读的文件→资料表行（只出候选，人确认才落表）
+          maintain: false # 定时维护：周期性 build + check，盲区自动进候选队列
