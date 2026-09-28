@@ -19,7 +19,7 @@
 | `jev-engine` | llm | **live** | 配置型样板：Key 到位 → 测通 → 才置生效 |
 | `surface-admin` | user | **live** | 资料面管理：看/改管理范围（只数文件名，不读内容） |
 | `radar` | both | todo | 资料亮起（每回合匹配资料并亮给模型） |
-| `graph-search` | both | todo | 指针图检索（词→文件/行，本地零账） |
+| `graph-search` | both | **live** | 指针图：建图／`light` 索引／`check` 体检（纯本地零账，秒级） |
 | `scaffold` | user | todo | 首次建档（四层骨架 + 资料表初稿） |
 | `mining` | llm | todo | 候选生成（查空的词→别名、反复读的→资料行） |
 | `maintain` | user | todo | 定时维护（build + check → 候选队列） |
@@ -43,6 +43,7 @@ lib/setup.js          配置账本 + Jev 测通（node:https，transport 可注�
 lib/probes.js         依赖探针 / 步骤探针（纯本地 fs/env，5 秒 TTL，绝不起进程）
 lib/keystore.js       Key 落点：宿主凭据面优先 + git 工作树守卫 + 掩码；明文只在本机内存过一下
 lib/surface.js         资料面登记（目录并集、排除匹配、扫描计数、试算）
+lib/graph.js           指针图（扫 .md → 节点/边 → graph.json；light 两级解析＋BFS；check 盲区）
 lib/api.js            面板 HTTP 面（延迟挂载 + prefix JSON 404 兜底 + 写后回快照）
 test/load.js          离线闸（零网络；条数看输出末行）
 test/stub-dsh-tools.mjs  宿主 dsh-tools 的恒等替身（让闸不依赖 DSH 安装）
@@ -52,7 +53,9 @@ test/stub-dsh-tools.mjs  宿主 dsh-tools 的恒等替身（让闸不依赖 DSH 
 
 ---
 
-## 3. 数据模型（盘上只有三本账，都是 append-only JSONL）
+## 3. 数据模型（三本账 + 一个派生缓存）
+
+> 三本账都是 append-only JSONL；另有一个**派生缓存** `<dataDir>/graph.json`（§3.4）——它不是账，删了可重建、不参与备份迁移。
 
 三本都是 **append-only JSONL**：一次操作＝一行，历史永不改写；读侧 fold 取每键最新行，坏行跳过并计数（fail-open：账本坏不拖垮功能）。
 
@@ -81,6 +84,15 @@ test/stub-dsh-tools.mjs  宿主 dsh-tools 的恒等替身（让闸不依赖 DSH 
 `step` 的取值＝登记表 `STEPS` 的键。测通类步骤有**时效**（`setupFreshDays`，默认 7 天）：过期即视为未满足，功能状态自动回退成「待配置」。
 
 **明文 Key 不进任何一本账**，只进 `masked`（长度 + 头尾几位）。
+
+### 3.4 `<dataDir>/graph.json` —— 指针图（派生缓存，不是账）
+
+`{version, builtAt, tookMs, roots[], stats{files,nodes,edges,unresolved,skippedExcluded,capped}, nodes[{key,kind,name,code,path,line,triggers[]}], edges[{from,to,kind,type,reason}]}`
+
+- 节点 `kind`＝`file`／`entry`（标题条目，带 `triggers[]`）／`name`（H1 题名）；边分 `structural`（contains/titled）与 `reference`（points：wikilink/path/code）。
+- **只索引不抄正文**：标题·条目号·触发行·反引号路径·「§三 XX12」式指针 ⇒ 图小、建得快、确定性（同输入同图），且不把敏感正文复制一份。
+- `unresolved`＝指向不存在资料的引用条数（体检的头号目标）；超 `graphMaxBytes` 的文件跳过并出提示；命中 `graphMaxFiles` ⇒ 标"图不完整"。
+- 解析优先级写死：**条目号 > 精确同名 > 归一相等 > 触发行子串 > 标题子串**（曾让子串先跑，把精准命中降级成"原样子串"，披露的依据就变成假的）。
 
 ### 3.3 `<dataDir>/surface.jsonl` —— 资料面（管到哪儿）
 
@@ -166,6 +178,7 @@ test/stub-dsh-tools.mjs  宿主 dsh-tools 的恒等替身（让闸不依赖 DSH 
 | `POST /switch` | `{feature,value,reason?}` | 用户切开关（不填理由也放行——面板是主人） |
 | `POST /takeover` | `{feature,value}` | 写 `lock:true`（接管，模型出局） |
 | `POST /release` | `{feature,value}` | 写 `lock:false`（解除接管） |
+| `POST /graph` | `{action:"build",reason?}` | 重建指针图（面板按钮走这里；`light`/`check` 归模型工具） |
 | `POST /surface` | `{op,path\|pattern,reason?}` | 资料面：`add-root`/`drop-root`/`add-exclude`/`drop-exclude`/`preview`（与模型工具同一个 `writeSurface`） |
 | 前缀下其它路径 | — | **JSON 404**（不能掉进宿主 SPA 回落返回 HTML） |
 
@@ -179,6 +192,7 @@ test/stub-dsh-tools.mjs  宿主 dsh-tools 的恒等替身（让闸不依赖 DSH 
 { features[], byGroup{组:feature[]}, ledger[], ledgerMeta{file,exists,corrupt,lines},
   setup[], setupMeta{file,exists,corrupt,freshDays},
   deps[{id,label,hard,note,result}],                       ← result:true 或"缺什么"的人话
+  graph{exists,file,builtAt,ageHours,stale,tooOld,changed,nodes,edges,files,unresolved,roots[],maxAgeHours},
   surface{exts[],prune[],roots[{path,source,removable,by,ts,exists,matched,capped,excluded,byRule{},samples[]}],
           excludes[{pattern,by,ts,hits}],totals{roots,dirsMissing,managed,hidden,capped},ledger{file,lines,corrupt},hint},
   meta{pkg,version,dataDir,llmCanSwitch,modelCanSaveKey,
@@ -186,13 +200,14 @@ test/stub-dsh-tools.mjs  宿主 dsh-tools 的恒等替身（让闸不依赖 DSH 
        configHints{memoryRoot[],pythonBin,graphDb,kernelRepo,keyFile,baseUrl,allowKeyInRepo}} }
 ```
 
-### 6.3 模型工具（四个）
+### 6.3 模型工具（五个）
 
 | 工具 | 参数 | 返回 |
 |---|---|---|
 | `memoryos_status` | `feature?` | 每个功能一行：状态／控制器／谁定的＋理由＋时间／缺依赖／待办／成本；含账本路径、Key 位置（掩码）与资料面计数 |
 | `memoryos_switch` | `feature`,`value:'on'|'off'`,`reason`（必填） | `✓ 已记一行…` / `✗ 拒绝：<原因>`；开了配置型功能会附"仍差 N 步，面板显示待配置" |
 | `memoryos_setup` | `action:'probe'|'save-key'|'where-key'|'list'`,`reason`（必填）,`feature?`,`key?`,`path?`,`allow_in_repo?` | 测通结果（含延迟与上游摘要）／代存落点与掩码／当前 Key 在哪／配置账本与待办 |
+| `memoryos_graph` | `action:'status'|'build'|'light'|'check'`,`query?`,`depth?`,`max_nodes?`,`reason?` | 图水位／重建结果（节点·边·未解析数）／`light` 亮起子图（带 reason 与解析级别，落空给候选）／`check` 盲区清单 |
 | `memoryos_surface` | `action:'list'|'add-root'|'drop-root'|'add-exclude'|'drop-exclude'|'preview'`,`path?`,`pattern?`,`reason`（写操作必填） | 资料面现状（每根纳管多少 `.md`、被哪条规则挡多少、样本路径）／增删目录与排除／试算。删 `profile` 基线会被拒；`.md` 之外的类型不放开 |
 
 ### 6.4 面板（`settings.section`，`id:'memoryos'`，`order:120`，label「记忆系统」）
@@ -213,8 +228,9 @@ test/stub-dsh-tools.mjs  宿主 dsh-tools 的恒等替身（让闸不依赖 DSH 
 | `memoryRoot` | `MD_MEMORY_ROOTS` | 记忆根，`;` 或 `,` 分隔多个 |
 | `pythonBin` | `MD_PYTHON_BIN` | 内核解释器（读面纯标准库，系统 Python 即可） |
 | `kernelRepo` | `MD_REPO_ROOT` | `pythonBin` 的发现基准 |
-| `graphDb` | `MEMORYOS_GRAPH` | 指针图库路径（默认在记忆根下找 `ledger_graph.db`） |
-| `graphStaleDays` | — | 图水位超过几天算降级 |
+| `graphMaxFiles` | — | 建图最多扫多少份文件（默认 2000；命中会标"图不完整"） |
+| `graphMaxBytes` | — | 单份文件超过多少字节就跳过（默认 1.5MB，防一份巨型日志拖垮建图） |
+| `graphStaleHours` | — | 图水位超过几小时算"该重建"（默认 24；另有 changed 文件数也会判过期） |
 | `ledgerTail` | — | 面板账本页显示多少行 |
 | `scanCap` | — | 资料面每根**最多数到多少个文件**就停（默认 400；面板要秒开，建索引是另一件事） |
 | `keyFile` | `JEV_KEY_FILE` | Key 文件位（凭据面之后、数据目录之前） |

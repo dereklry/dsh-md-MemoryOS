@@ -19,7 +19,7 @@
 import assert from 'node:assert/strict'
 import { registerHooks } from 'node:module'
 import { pathToFileURL } from 'node:url'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync, existsSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync, existsSync, utimesSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 
@@ -43,11 +43,25 @@ const S = await import(pathToFileURL(path.join(PKG, 'lib', 'switches.js')).href)
 const P = await import(pathToFileURL(path.join(PKG, 'lib', 'probes.js')).href)
 const U = await import(pathToFileURL(path.join(PKG, 'lib', 'setup.js')).href)
 const V = await import(pathToFileURL(path.join(PKG, 'lib', 'surface.js')).href)
+const GR = await import(pathToFileURL(path.join(PKG, 'lib', 'graph.js')).href)
 const A = await import(pathToFileURL(path.join(PKG, 'lib', 'api.js')).href)
 const H = await import(pathToFileURL(path.join(PKG, 'index.js')).href)
 
 const tmp = mkdtempSync(path.join(tmpdir(), 'memoryos-gate-'))
 const clean = () => rmSync(tmp, { recursive: true, force: true })
+
+/** 测试语料：一份手册 + 一份事项（含触发行、条目号互指、一个指向不存在文件的引用、一个没人指的条目） */
+const L = (...a) => a.join('\n')
+function makeCorpus(dir) {
+  mkdirSync(path.join(dir, 'notes'), { recursive: true })
+  writeFileSync(path.join(dir, 'manual.md'), L(
+    '# 手册', '', '## 一、事件流水', '', '### AA1 装插件要按七步走', '- **触发**：装插件；上线七步；回滚锚',
+    '正文里见 AA2，还指了一个不存在的 `notes/gone.md`。', ''), 'utf8')
+  writeFileSync(path.join(dir, 'notes', 'alpha.md'), L(
+    '# Alpha 事项', '', '### AA2 Alpha 的做法', '- **触发**：alpha 怎么写', '这里回指 [[AA1 装插件要按七步走]]。', '',
+    '### AA3 没人指的条目', '（故意不留触发行，也没人引用）', ''), 'utf8')
+  return dir
+}
 
 // ————————————————————————————————— A 功能登记表自洽
 {
@@ -142,7 +156,7 @@ const clean = () => rmSync(tmp, { recursive: true, force: true })
   const disposer = H.apply(ctx, { dataDir, memoryRoot: tmp, transport, llmCanSwitch: true, modelCanSaveKey: true })
 
   ok(typeof disposer === 'function', 'E1 apply 返回可释放函数（返数组会被 web 组合判 Invalid effect）')
-  ok(regs.length === 4 && regs.map((t) => t.name).join(',') === 'memoryos_status,memoryos_switch,memoryos_setup,memoryos_surface', 'E2 四工具：状态／切开关／配置动作／资料面')
+  ok(regs.length === 5 && regs.map((t) => t.name).join(',') === 'memoryos_status,memoryos_switch,memoryos_setup,memoryos_surface,memoryos_graph', 'E2 五工具：状态／切开关／配置动作／资料面／指针图')
   ok(logs.some((l) => /就位/.test(l)) && !logs.some((l) => l.startsWith('W:')), 'E3 装载留一行日志且自检零告警（登记表／探针同源／路由对账三查）')
   ok(child.length === 1 && typeof child[0] === 'function', 'E4 webServer 走 ctx.inject 延迟挂载（顶层 inject 会让 headless 整个插件永挂）')
   ok(routes.some((r) => r.kind === 'prefix' && r.path === A.PREFIX), 'E5 有 prefix 兜底（未知子路径必须回 JSON 404，不能掉进 SPA 回落返回 HTML）')
@@ -432,6 +446,133 @@ const clean = () => rmSync(tmp, { recursive: true, force: true })
   disposerS()
 }
 
+// ————————————————————————————————— M 指针图：建图 / 索引 / 体检
+{
+  const corpus = makeCorpus(path.join(tmp, 'corpus'))
+  const notesDir = path.join(corpus, 'notes')
+  const alpha = path.join(notesDir, 'alpha.md')
+  const cfgG = { dataDir: path.join(tmp, 'gstate'), memoryRoots: [corpus], legacyKeyFiles: [], graphStaleHours: 24, graphMaxFiles: 500 }
+  const foldG = () => V.foldSurface(cfgG.dataDir)
+
+  const lf = GR.listFiles(cfgG, foldG())
+  ok(lf.files.length === 2 && lf.files.every((f) => f.path.endsWith('.md')), `M1 扫管理范围拿到 .md 清单（实测 ${lf.files.length} 份）`)
+  V.appendSurface(cfgG.dataDir, { op: 'add-exclude', pattern: 'notes/', by: 'user' })
+  ok(GR.listFiles(cfgG, foldG()).files.length === 1, 'M2 建图遵守资料面的排除（排掉的目录真不进图，图与面板同一个范围）')
+  V.appendSurface(cfgG.dataDir, { op: 'drop-exclude', pattern: 'notes/', by: 'user' })
+
+  const built = GR.build(cfgG, foldG(), { maxFiles: 500 })
+  const g = built.graph
+  ok(built.warnings.length === 0, `M3 建图零警告（实测：${built.warnings.join(' / ') || '无'}）`)
+  ok(g.stats.files === 2 && g.stats.nodes >= 5 && g.stats.edges >= 4, `M4 节点与边都建出来了（nodes=${g.stats.nodes} edges=${g.stats.edges}）`)
+  ok(g.stats.unresolved === 1, `M5 指向不存在资料的引用被算成"未解析"（实测 ${g.stats.unresolved}，就是那句 gone.md）`)
+  ok(existsSync(GR.graphFile(cfgG.dataDir)), 'M6 图落盘到 <dataDir>/graph.json（派生缓存，删了可重建）')
+  const g2 = GR.load(cfgG)
+  ok(g2 && g2.version === GR.GRAPH_VERSION && g2.nodes.length === g.nodes.length, 'M7 读回来的图与建出来的一致（load 认版本号，旧图不误用）')
+  ok(GR.load({ ...cfgG, dataDir: path.join(tmp, 'no-such-dir') }) === null, 'M8 图不存在时 load 返回 null（不是抛异常）')
+
+  const r1 = GR.resolveStarts(g2, 'AA1')
+  ok(r1.starts.length >= 1 && r1.level === '精准' && /条目号/.test(r1.starts[0].how), `M9 条目号精准命中并披露依据（${r1.starts.map((x) => x.name).join('/')}）`)
+  const r2 = GR.resolveStarts(g2, '上线七步')
+  ok(r2.starts.length >= 1 && /触发行/.test(r2.starts[0].how), 'M10 触发行也能当起点（这就是"只索引标题+触发行"的用处）')
+  const r3 = GR.resolveStarts(g2, 'AlphaX 的做法')
+  ok(r3.starts.length >= 1 && /变体/.test(r3.level) && /变体/.test(r3.starts[0].how), `M11 手滑多打一个字仍找到，但**级别标成变体并写出用了哪一步**（${r3.level}｜${r3.starts[0].how}）`)
+  const r3b = GR.resolveStarts(g2, 'AA2 AlphaX 的做法')
+  ok(r3b.level === '精准' && /条目号 AA2/.test(r3b.starts[0].how), 'M11b 查询里带了条目号 ⇒ 直接按精准走（编号优先于模糊，别把确定的事做成猜的）')
+  const r4 = GR.resolveStarts(g2, 'ZZZ 完全无关的词')
+  ok(r4.starts.length === 0 && Array.isArray(r4.candidates), 'M12 真查不到就老实空手＋给候选，不硬凑一个最像的')
+
+  const sub1 = GR.subgraph(g2, r1.starts, { depth: 1 })
+  const sub2 = GR.subgraph(g2, r1.starts, { depth: 2 })
+  ok(sub1.nodes.length >= 2 && sub2.nodes.length >= sub1.nodes.length, `M13 深度越大子图越大（1 层 ${sub1.nodes.length}／2 层 ${sub2.nodes.length}）`)
+  ok(sub2.edges.every((e0) => !!e0.reason), 'M14 每条边都带 reason（"为什么要读它"必须能解释，这是图相对于全文检索的价值）')
+  const stFresh = GR.status(cfgG, foldG(), { maxAgeHours: 24, maxFiles: 500 })
+  ok(stFresh.exists && stFresh.stale === false && stFresh.changed === 0, 'M15 刚建完＝水位新、无未入图改动')
+  const outText = GR.render(g2, 'AA1', r1, sub2, stFresh, { depth: 2 })
+  ok(/亮起子图/.test(outText) && /起点解析＝\*\*精准/.test(outText) && /建议读/.test(outText) && /地图不是内容/.test(outText),
+    'M16 渲染出的就是给人看的那页（水位＋解析级别＋边＋建议读＋"地图不是内容"的提醒）')
+  ok(/没找到起点/.test(GR.render(g2, 'ZZZ 完全无关的词', r4, GR.subgraph(g2, r4.starts, {}), stFresh, {})), 'M17 查不到时的输出教用户补触发行，而不是劝人改标题')
+
+  const stamp = Date.now()
+  // utimesSync 的 Date 单位是毫秒（早先误除 1000 把文件时间改到 1970 年，反而"没改动"——测试自己的 bug）
+  utimesSync(alpha, new Date(stamp), new Date(stamp + 60000))
+  const stDirty = GR.status(cfgG, foldG(), { maxAgeHours: 24, maxFiles: 500 })
+  ok(stDirty.changed >= 1 && stDirty.stale === true, `M18 文件被改过就报"该重建"（changed=${stDirty.changed}）——图不会悄悄落后`)
+  const gj = JSON.parse(readFileSync(GR.graphFile(cfgG.dataDir), 'utf8'))
+  gj.builtAt = new Date(stamp - 40 * 3600000).toISOString()
+  writeFileSync(GR.graphFile(cfgG.dataDir), JSON.stringify(gj), 'utf8')
+  const stOld = GR.status(cfgG, foldG(), { maxAgeHours: 24, maxFiles: 500 })
+  ok(stOld.tooOld === true && stOld.ageHours > 39, `M19 超过阈值也报该重建（水位 ${stOld.ageHours}h）`)
+  const rebuilt = GR.build(cfgG, foldG(), { maxFiles: 500 })
+  ok(GR.status(cfgG, foldG(), { maxAgeHours: 24, maxFiles: 500 }).stale === false && rebuilt.graph.stats.files === 2, 'M20 重建后水位归零（幂等：同一批文件必然得到同一张图）')
+
+  const chk = GR.check(cfgG, foldG(), rebuilt.graph, { maxAgeHours: 24, maxFiles: 500 })
+  ok(chk.ok && chk.counts.noTrigger >= 1 && chk.entriesWithoutTrigger.some((x) => /AA3/.test(x.name)), 'M21 体检点出"条目缺触发行"（索引唯一认的东西，缺了就匹配不上）')
+  ok(chk.orphanEntries.some((x) => /AA3/.test(x.name)) && !chk.orphanEntries.some((x) => /AA2/.test(x.name)),
+    'M22 体检点出"没人引用的条目"，且**按引用边算不是按度数**（每条条目都有 contains 边，用度数会永远是 0——本轮实踩）')
+  ok(/体检：/.test(GR.checkText(chk)) && chk.verdict.includes('盲区'), 'M23 体检能出一段人可读的清单（不是只给计数）')
+  const chkNo = GR.check({ ...cfgG, dataDir: path.join(tmp, 'empty-state') }, V.foldSurface(path.join(tmp, 'empty-state')))
+  ok(chkNo.ok === false && /图不存在/.test(chkNo.message) && /memoryos_graph\(action=build\)/.test(chkNo.message), 'M24 没图时体检直接指路怎么建（不抛异常、不返回空表糊弄）')
+
+  // 探针与登记表同源：建图前后，DEPS/STEPS 的口径要跟着真实图走（用两个不同 dataDir，别拿刚建过的验"没建"）
+  const bPre = P.makeProbes({ ...cfgG, dataDir: path.join(tmp, 'gnone'), rootsOf: () => [corpus] }, { webserver: true })
+  const preStep = P.stepAll(bPre)
+  ok(typeof P.probeAll(bPre)['graph-db'] === 'string' && preStep['graph-built'].done === false && /memoryos_graph/.test(preStep['graph-built'].why),
+    `M25 探针：图不在 ⇒ 依赖给人话、步骤未满足且**指路怎么建**（${String(preStep['graph-built'].why).slice(0, 30)}…）`)
+  const bPost = P.makeProbes({ ...cfgG, rootsOf: () => [corpus] }, { webserver: true })
+  ok(P.probeAll(bPost)['graph-db'] === true && P.stepAll(bPost)['graph-built'].done === true, 'M26 探针：图建好 ⇒ 依赖与步骤同时转绿（面板不用另写一套判断）')
+}
+
+// ————————————————————————————————— N 指针图端到端（面板建图 ⇒ 功能从「待配置」转「生效中」）
+{
+  const regsN = [], routesN = []
+  const subN = { get: (x) => (x === 'webServer' ? { register: (r) => { routesN.push(r); return () => {} } } : undefined), logger: { info() {}, warn() {} }, tools: { register: (t) => { regsN.push(t); return () => {} } } }
+  const dirN = path.join(tmp, 'hgn')
+  const disposerN = H.apply({ logger: subN.logger, tools: subN.tools, get: subN.get, inject: (_d, cb) => cb(subN) },
+    { dataDir: dirN, memoryRoot: makeCorpus(path.join(tmp, 'corpusN')), graphStaleHours: 24 })
+  const postN = (p, body) => new Promise((res) => {
+    const route = routesN.find((r) => r.path === A.PREFIX + p)
+    const req = { on: (ev, fn) => { if (ev === 'data') fn(JSON.stringify(body || {})); if (ev === 'end') fn() }, destroy() {} }
+    const rr = { writeHead: (c) => { rr.code = c }, end: (s) => res({ code: rr.code, body: JSON.parse(s) }) }
+    route.handler(req, rr)
+  })
+  const fOf = (r, id) => r.body.snapshot.features.find((x) => x.id === id)
+  const snap0 = await postN('/snapshot', {})
+  const f0 = fOf(snap0, 'graph-search')
+  ok(f0.state === 'waiting' && f0.pending.length === 1 && f0.pending[0].by === 'llm',
+    `N1 全新实例：图检索＝${f0.state}（默认开着但没建图，面板写清"待模型执行"，不算生效）`)
+  const built1 = await postN('/graph', { action: 'build' })
+  ok(built1.code === 200 && built1.body.snapshot.graph.exists && built1.body.snapshot.graph.nodes > 0,
+    `N2 面板点「建立指针图」⇒ 200 且回快照直接带图（${built1.body.snapshot.graph.nodes} 节点）`)
+  const f1 = fOf(built1, 'graph-search')
+  ok(f1.state === 'on' && f1.pending.length === 0, `N3 建完图同一功能自动转成「生效中」（没有任何手工标记）`)
+  ok(/graph\.json/.test(built1.body.snapshot.graph.file) && built1.body.snapshot.graph.file.startsWith(dirN),
+    'N4 图落在本包 dataDir 下（不污染用户的资料目录）')
+  const setupN = readFileSync(path.join(dirN, 'setup.jsonl'), 'utf8')
+  ok(/"step":"graph-built"/.test(setupN) && /"by":"user"/.test(setupN) && /节点/.test(setupN),
+    'N5 建图这一步进了配置账（谁建的、规模多大，事后可查）')
+  const gTool = regsN.find((t) => t.name === 'memoryos_graph')
+  ok(!!gTool, 'N6 第五个工具 memoryos_graph 已注册（工具表判据）')
+  const ls = await gTool.execute({ action: 'status' })
+  ok(/指针图/.test(ls.text) && /节点/.test(ls.text), `N7 status 动作给人话（${ls.text.slice(0, 40)}…）`)
+  const li = await gTool.execute({ action: 'light', query: 'AA1' })
+  ok(/亮起子图/.test(li.text) && /建议读/.test(li.text), 'N8 light 动作返回可读子图与建议读清单（模型能直接照做）')
+  const ck = await gTool.execute({ action: 'check' })
+  ok(/体检：/.test(ck.text) && /AA3/.test(ck.text), 'N9 check 动作把盲区端出来（AA3 那条缺触发行＋没人指）')
+  const bad = await gTool.execute({ action: 'nope' })
+  ok(/✗/.test(bad.text) && /status \| build \| light \| check/.test(bad.text), 'N10 未知动作被拒并列出可用动作')
+  disposerN()
+  ok(existsSync(path.join(dirN, 'graph.json')), 'N11 图文件真在盘上（不是只在内存里算过）')
+
+  const regsN2 = []
+  const subN2 = { get: () => undefined, logger: { info() {}, warn() {} }, tools: { register: (t) => { regsN2.push(t); return () => {} } } }
+  const disposerN2 = H.apply({ logger: subN2.logger, tools: subN2.tools, get: subN2.get, inject: (_d, cb) => cb(subN2) },
+    { dataDir: path.join(tmp, 'hgno'), memoryRoot: '' })
+  const g2 = regsN2.find((t) => t.name === 'memoryos_graph')
+  const noRoot = await g2.execute({ action: 'build', reason: '想建图' })
+  ok(/✗/.test(noRoot.text) && /记忆根/.test(noRoot.text), 'N12 没划范围就想建图 ⇒ 拒并指路去资料面（不在空目录上建个空图糊弄人）')
+  disposerN2()
+}
+
 // ————————————————————————————————— K 文档与代码对账（四份文档最容易坏在漂移，让它当场变红）
 {
   const idx = readFileSync(path.join(PKG, 'index.js'), 'utf8')
@@ -451,8 +592,8 @@ const clean = () => rmSync(tmp, { recursive: true, force: true })
   const realTools = new Set([...idx.matchAll(/name: '(memoryos_[a-z]+)'/g)].map((m) => m[1]))
   const named = new Set((all.match(/memoryos_[a-z-]+/g) || []).map((s) => s.replace(/-+$/, '')))
   const ghost = [...named].filter((x) => !realTools.has(x))
-  ok(realTools.size === 4 && [...realTools].sort().join(',') === 'memoryos_setup,memoryos_status,memoryos_surface,memoryos_switch',
-    `K2a 代码注册的工具正好四个（抽到 ${realTools.size}：${[...realTools].sort().join(' ')}）——加第五个工具没同步文档就拦在这里`)
+  ok(realTools.size === 5 && [...realTools].sort().join(',') === 'memoryos_graph,memoryos_setup,memoryos_status,memoryos_surface,memoryos_switch',
+    `K2a 代码注册的工具正好五个（抽到 ${realTools.size}：${[...realTools].sort().join(' ')}）——加第六个工具没同步文档就拦在这里`)
   ok(ghost.length === 0, `K2b 文档提到的工具都真实存在（幽灵：${ghost.join(' ')}）`)
 
   // K3 setup 的 action 名与代码分支同源

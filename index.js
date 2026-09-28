@@ -1,4 +1,4 @@
-﻿/**
+/**
  * dsh-md-MemoryOS · Host 半
  *
  * 只做接线，口径全在 lib/：
@@ -22,6 +22,7 @@ import { makeProbes, probeAll, stepAll, envOf } from './lib/probes.js'
 import { foldSetup, recordSetup, probeJev } from './lib/setup.js'
 import { makeKeystore, KEY_REF } from './lib/keystore.js'
 import { foldSurface, appendSurface, surfaceView, effectiveRoots, badRoot, badPattern, preview, MANAGED_EXTS } from './lib/surface.js'
+import { build as buildGraph, load as loadGraph, status as graphStatus, check as graphCheck, checkText, resolveStarts, subgraph, render as renderLight, graphFile } from './lib/graph.js'
 
 /** 路径归一（账本与提示都用正斜杠、去尾斜杠；只用于比较与显示，不改写用户传入的原样值） */
 const normPath = (p) => String(p || '').trim().replace(/\\/g, '/').replace(/\/+$/, '')
@@ -38,15 +39,17 @@ export function readCfg(config) {
   return {
     dataDir,
     memoryRoots: roots,
-    graphDb: c.graphDb || envOf('MEMORYOS_GRAPH') || '',
     pythonBin: c.pythonBin || envOf('MD_PYTHON_BIN') || '',
     kernelRepo: c.kernelRepo || envOf('MD_REPO_ROOT') || '',
+    // 指针图（本包自建，纯 JS，落 <dataDir>/graph.json）：多久算过期、最多扫多少文件
+    graphStaleHours: Number(c.graphStaleHours) > 0 ? Number(c.graphStaleHours) : 24,
+    graphMaxFiles: Number(c.graphMaxFiles) > 0 ? Number(c.graphMaxFiles) : 2000,
+    graphMaxBytes: Number(c.graphMaxBytes) > 0 ? Number(c.graphMaxBytes) : 1_500_000,
     keyFile: c.keyFile || envOf('JEV_KEY_FILE') || join(dataDir, 'jev-key.txt'),
     baseUrl: String(c.baseUrl || envOf('JEV_BASE_URL') || 'https://api.typesafe.ai').replace(/\/+$/, ''),
     model: c.model || envOf('JEV_MODEL') || 'jev-latest',
     probeTimeoutMs: Number(c.probeTimeoutMs) > 0 ? Number(c.probeTimeoutMs) : 6000,
     setupFreshDays: Number(c.setupFreshDays) > 0 ? Number(c.setupFreshDays) : 7,
-    staleDays: Number(c.graphStaleDays) > 0 ? Number(c.graphStaleDays) : 7,
     ledgerTail: Number(c.ledgerTail) > 0 ? Number(c.ledgerTail) : 40,
     // 资料面扫描上限：只数文件名，命中即停（面板刷新要便宜，索引是另一件事）
     scanCap: Number(c.scanCap) > 0 ? Number(c.scanCap) : 400,
@@ -128,6 +131,8 @@ export function apply(ctx, config) {
       deps: Object.keys(DEPS).map((id) => ({ id, ...DEPS[id], result: deps[id] })),
       // 资料面＝管理范围内的目录与文件类型（面板「资料面」页与 memoryos_surface 共用这一份）
       surface: surfaceView(cfg, foldSurface(cfg.dataDir), { cap: cfg.scanCap }),
+      // 指针图（本包自建）：状态与水位，面板与工具同一口径
+      graph: graphStatus(cfg, foldSurface(cfg.dataDir), { maxAgeHours: cfg.graphStaleHours, maxFiles: cfg.graphMaxFiles, exts: MANAGED_EXTS }),
       meta: {
         pkg: name, version: pkgVersion(), dataDir: cfg.dataDir,
         llmCanSwitch: cfg.llmCanSwitch, modelCanSaveKey: cfg.modelCanSaveKey,
@@ -387,11 +392,83 @@ export function apply(ctx, config) {
     },
   }))
 
+  // ---------------------------------------------------------------- 指针图：建图 / 索引 / 体检
+  function runGraph(input) {
+    const body = input || {}
+    const by = body.by === 'llm' ? 'llm' : 'user'
+    const action = String(body.action || body.op || 'status').trim().toLowerCase()
+    const folded = foldSurface(cfg.dataDir)
+    const opts = { maxFiles: cfg.graphMaxFiles, maxBytes: cfg.graphMaxBytes }
+    if (action === 'build') {
+      if (!cfg.rootsOf().length) return { ok: false, message: '还没有记忆根，建不了图：先在面板「资料面」页纳入目录（或 profile 填 config.memoryRoot）' }
+      const t0 = Date.now()
+      const { graph, warnings } = buildGraph(cfg, folded, opts)
+      bundle.invalidate()
+      recordSetup(cfg.dataDir, { step: 'graph-built', ok: true, by, note: `节点 ${graph.stats.nodes}／边 ${graph.stats.edges}／文件 ${graph.stats.files}`, latencyMs: Date.now() - t0, reason: String(body.reason || '').slice(0, 300) })
+      return {
+        ok: true,
+        message: `指针图已重建：${graph.stats.files} 份 .md → ${graph.stats.nodes} 节点／${graph.stats.edges} 边（${((Date.now() - t0) / 1000).toFixed(1)}s）`
+          + `｜未解析引用 ${graph.stats.unresolved}｜被资料面排除跳过 ${graph.stats.skippedExcluded}${graph.stats.capped ? '｜**命中文件上限，图不完整**（调大 config.graphMaxFiles）' : ''}`
+          + (warnings.length ? `｜提示 ${warnings.length} 条：${warnings.slice(0, 3).join(' ｜ ')}` : '')
+          + `｜落 ${graphFile(cfg.dataDir)}`,
+      }
+    }
+    const g = loadGraph(cfg)
+    if (!g) return { ok: false, message: `图还不存在（${graphFile(cfg.dataDir)}）：先跑 memoryos_graph(action='build')` }
+    if (action === 'light' || action === 'lookup' || action === 'find') {
+      const q = String(body.query || '').trim()
+      if (!q) return { ok: false, message: 'light 需要 query（要查的词/条目号/文件名）' }
+      const depth = Number(body.depth) > 0 ? Math.min(3, Number(body.depth)) : 2
+      const res = resolveStarts(g, q, { maxStarts: 6 })
+      const sub = subgraph(g, res.starts, { depth, maxNodes: Number(body.max_nodes) > 0 ? Number(body.max_nodes) : 45 })
+      const st = graphStatus(cfg, folded, { ...opts, maxAgeHours: cfg.graphStaleHours })
+      return { ok: true, message: renderLight(g, q, res, sub, st, { depth }), matched: res.starts.length, level: res.level, nodes: sub.nodes.length, edges: sub.edges.length, stale: st.stale }
+    }
+    if (action === 'check') {
+      const out = graphCheck(cfg, folded, g, { ...opts, maxAgeHours: cfg.graphStaleHours })
+      return { ok: true, message: checkText(out), counts: out.counts }
+    }
+    if (action === 'status') {
+      const st = graphStatus(cfg, folded, { ...opts, maxAgeHours: cfg.graphStaleHours })
+      return { ok: true, message: st.exists
+        ? `指针图：${st.files} 份文件 → ${st.nodes} 节点／${st.edges} 边｜建于 ${st.builtAt}（${st.ageHours}h 前，阈值 ${st.maxAgeHours}h）｜${st.stale ? `**该重建**：${st.changed} 个文件建图后又改了` : '较新'}｜未解析引用 ${st.unresolved}｜落 ${st.file}`
+        : `指针图还没建（${st.file} 不存在）：跑 memoryos_graph(action='build')` }
+    }
+    return { ok: false, message: `未知动作：${action}（可用 status | build | light | check）` }
+  }
+
+  reg(defineTool({
+    name: 'memoryos_graph',
+    description:
+      'MemoryOS 的**指针图**（本包自建、纯本地、零账）：`build` 扫管理范围内的 .md 建图；`light` 按词查子图并解释"为什么牵动这份文件"；`check` 出盲区清单；`status` 看水位。'
+      + '只索引**标题/条目号/触发行/反引号路径/「§三 AA14」式指针**，正文不进图 ⇒ 查回来的是**地图不是内容**：要读文件仍得自己 read，引入前仍要过筛。'
+      + '起点解析分两级并披露：先精准（原样/条目号/归一/子串/触发行），全空才进变体（归一子串/删一字/词相似度），输出会写明用了哪一级——**别把变体命中当精准命中汇报**。'
+      + '`check` 报的三类问题都不报错、只能靠体检发现：有资料没触发行（索引匹配不上）、条目孤立（写了没人指）、引用未解析（指向改名或不存在的资料）。'
+      + '图是派生缓存：删了可重建；改了资料就 build 一次（面板「资料面」页也有重建按钮）。',
+    parameters: {
+      action: { type: 'string', required: true, description: 'status | build | light | check' },
+      query: { type: 'string', required: false, description: '仅 light：要查的词、条目号（如 AA14）或文件名' },
+      depth: { type: 'number', required: false, description: '仅 light：子图深度 1~3（默认 2；越大越费上下文）' },
+      max_nodes: { type: 'number', required: false, description: '仅 light：子图最多多少节点（默认 45）' },
+      reason: { type: 'string', required: false, description: '仅 build：为什么重建（面板与账本会显示；建图本身零账）' },
+    },
+    output: { schema: 'text' },
+    async execute(args) {
+      try {
+        const r = runGraph({ ...args, by: 'llm' })
+        return { text: r.ok ? r.message : `✗ ${r.message}` }
+      } catch (e) {
+        return { text: `图操作失败：${String((e && e.message) || e)}` }
+      }
+    },
+  }))
+
   // ---------------------------------------------------------------- 面板数据面
   disposers.push(createApi(ctx, {
     snapshot: () => buildSnapshot(),
     write: (body) => writeSwitch({ ...body, by: body && body.by === 'llm' ? 'llm' : 'user' }),
     surface: (body) => writeSurface({ ...body, by: body && body.by === 'llm' ? 'llm' : 'user' }),
+    graph: (body) => runGraph({ ...body, by: body && body.by === 'llm' ? 'llm' : 'user' }),
     runtime,
     log,
     warn,

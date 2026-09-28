@@ -1,4 +1,4 @@
-﻿/* dsh-md-MemoryOS · 控制面板（设置 → 记忆系统）
+/* dsh-md-MemoryOS · 控制面板（设置 → 记忆系统）
  *
  * 形态：手写 cordis client 工厂 bundle——`window.__ModuleLoader__.load({id, factory})`，零构建链
  * （react 走平台种子词解析）。为什么不上打包器：本包只有这一个浏览器文件。
@@ -268,10 +268,11 @@ window.__ModuleLoader__.load({
 					e("div", { style: ST.meta }, "Key 明文只落文件：不进本账、不进日志、不回显，这里最多出现掩码。")));
 		}
 
-		/** 资料面：管理范围（目录）＋排除（子目录/文件）＋固定的文件类型。
-		 *  写操作全走 /surface（与模型工具同一个 writeSurface），返回即带新快照。 */
+		/** 资料面：管理范围（目录）＋排除（子目录/文件）＋固定的文件类型＋指针图水位。
+		 *  写操作全走 /surface 与 /graph（与模型工具同一入口），返回即带新快照。 */
 		function Surface(props) {
 			var s = props.snap.surface;
+			var s2 = props.snap.graph || {};
 			var busy = props.busy;
 			var act = props.act;
 			var st1 = useState(""), rootBox = st1[0], setRootBox = st1[1];
@@ -340,6 +341,20 @@ window.__ModuleLoader__.load({
 						e("button", { style: ST.btn, disabled: busy || !patBox.trim(), "data-sev": "mos:ex-preview", title: "先看看会挡住哪些文件（不落账）", onClick: function () { addEx(false); } }, "试算"),
 						e("button", { style: mix(ST.btn, ST.tabOn), disabled: busy || !patBox.trim(), "data-sev": "mos:ex-add", onClick: function () { addEx(true); } }, "排除")),
 					e("div", { style: ST.meta }, "提示：", s.hint)),
+				e("div", { style: ST.card },
+					e("div", ST.row,
+						e("div", { style: ST.h }, "指针图（本包自建·纯本地·零账）"),
+						s2.exists ? Badge({ text: s2.nodes + " 节点 / " + s2.edges + " 边", kind: "ok" }) : Badge({ text: "还没建图", kind: "warn" }),
+						s2.exists && s2.stale ? Badge({ text: "该重建", kind: "warn" }) : null,
+						s2.exists && !s2.stale ? Badge({ text: "水位较新", kind: "off" }) : null,
+						e("button", { style: mix(ST.btn, ST.tabOn), disabled: busy, "data-sev": "mos:graph-build", title: "扫描管理范围内的 .md 重建（秒级；图是派生缓存，删了可重建）", onClick: function () { act({ path: "/graph", body: { action: "build" } }); } }, s2.exists ? "重建指针图" : "建立指针图")),
+					e("div", { style: ST.meta }, s2.exists
+						? "建于 " + String(s2.builtAt || "").slice(0, 16).replace("T", " ") + "（" + s2.ageHours + "h 前，阈值 " + s2.maxAgeHours + "h）｜扫 " + s2.files + " 份 .md｜"
+							+ (s2.changed ? "有 " + s2.changed + " 个文件建图后又改了（结果不含最新内容）" : "文件都已入图")
+							+ (s2.unresolved ? "｜未解析引用 " + s2.unresolved + " 条（指向改名或不存在的资料）" : "")
+						: "图没建时，检索／亮起／建档都无从算起。建一次就够，改了资料再建。"),
+					e("div", { style: ST.meta }, "图文件：", e("code", { style: ST.code }, String(s2.file || "")),
+						"｜只索引标题·条目号·触发行·反引号路径·「§三 AA14」式指针，正文不进图 ⇒ 查回来的是**地图不是内容**。")),
 				e("div", { style: ST.card },
 					e("div", { style: ST.h }, "资料面账本"),
 					e("div", { style: ST.meta }, "append-only，一次操作＝一行：", e("code", { style: ST.code }, s.ledger.file),
