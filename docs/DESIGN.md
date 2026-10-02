@@ -16,9 +16,10 @@
 | `panel` | user | **live** | 设置里的这一节本身 |
 | `health` | user | **live** | 状态与依赖体检（每行现算） |
 | `switch-ledger` | user | **live** | append-only 开关账本 |
-| `jev-engine` | llm | **live** | 配置型样板：Key 到位 → 测通 → 才置生效 |
+| `jev-engine` | llm | **live** | 语义通道**配好备用**：Key 到位 → 测通 → 才置生效。**定位＝按需调用的工具，不是每回合主力**（2026-10-02 起） |
+| `find` | llm | todo | **按需语义寻路**：只有事、没有词时按次调一次，给文件＋节＋行号——**语义能力的主力形态**（取代"每回合自动指路"） |
 | `surface-admin` | user | **live** | 资料面管理：看/改管理范围（只数文件名，不读内容） |
-| `radar` | both | todo | 资料亮起（每回合匹配资料并亮给模型）——**2026-10-02 降级为默认关**（出厂 `default:false`，只作开发者 opt-in；理由与优化清单＝`JUDGMENTS.md` §5.5） |
+| `radar` | both | todo | 资料亮起（**旧形态**：每回合开场自动匹配并注入）——**2026-10-02 降级为默认关**（出厂 `default:false`；语义能力改走"按需工具"＝`find`／`jev-engine`；理由与优化清单＝`JUDGMENTS.md` §5.5） |
 | `graph-search` | both | **live** | 指针图：建图／`light` 索引／`check` 体检（纯本地零账，秒级） |
 | `scaffold` | user | todo | 首次建档（四层骨架 + 资料表初稿） |
 | `mining` | llm | todo | 候选生成（查空的词→别名、反复读的→资料行） |

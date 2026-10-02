@@ -109,8 +109,8 @@
 
 另外两条总闸：`llmCanSwitch=false` ⇒ 你完全不能改开关；`modelCanSaveKey=false` ⇒ 不能代存 Key。**都是合法配置，不是 bug**，遇到就转告用户。
 
-未实现（`impl:'todo'`）一律拒，理由会写"代码尚未实现"。**当前已实现：`panel / health / switch-ledger / surface-admin / jev-engine / graph-search`；还在搬的是 `radar`（每回合自动亮起）、`scaffold`（建档）、`mining`（候选）、`maintain`（定时维护）**——别向用户承诺它们的效果。
-> **例外要说清：`radar` 不是"欠着要做的默认器官"，它已降级为"默认不开启"**（2026-10-02，出厂 `default:false`；理由＝`JUDGMENTS.md` §5.5）。所以：**别主动建议用户开它**（它是每回合固定计费点，且输入要人持续维护）；只有用户/开发者明确要试语义路由时，才引导走 opt-in＝面板开 `radar` ＋ `jev-engine` 真测通 ＋ 自己维护一份判路问句文档。
+未实现（`impl:'todo'`）一律拒，理由会写"代码尚未实现"。**当前已实现：`panel / health / switch-ledger / surface-admin / jev-engine / graph-search`**；**未实现 5 项**＝`radar`（每回合自动亮起，**已降级默认关**）、`find`（**按需语义寻路**，语义能力的主力形态）、`scaffold`（建档）、`mining`（候选）、`maintain`（定时维护）——别向用户承诺它们的效果。
+> **语义能力的正确用法（2026-10-02 定位）**：**按需调用，不是每回合主力**。要"这件事该读哪份资料"时，先走 `memoryos_graph`（词/条目号/文件名 → light，零账毫秒；查不到再看它的候选与"零命中"提示）；只有**给不出词**（只有事）时才用语义通道（`find` 未实现，先用 `jev-engine` 配好的通道按次调一次）。**别指望每回合自动亮资料**，也**别主动建议用户开 `radar`**——那个旧形态已降级为默认关（每回合固定计费点＋输入要人持续维护），理由与 opt-in 办法见 `JUDGMENTS.md` §5.5。
 
 ---
 
