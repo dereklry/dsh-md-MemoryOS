@@ -581,6 +581,11 @@ function makeCorpus(dir) {
   const ac = await gTool.execute({ action: 'archive-check' })
   ok(/归档闸/.test(ac.text) && /没找到任何 git 仓/.test(ac.text) && /本次未提交的新增/.test(ac.text),
     'N13 archive-check 端到端可用：记忆根不在 git 仓里时**如实说"按空集处理不硬猜"**，不假装查过')
+  // 零命中兜底的工具层端到端（2026-10-02 移植）：corpusN 里 'gone' 只出现在 manual.md 的正文（反引号路径里）
+  const ftLight = await gTool.execute({ action: 'light', query: 'gone' })
+  ok(/字面出现过/.test(ftLight.text) && /manual\.md/.test(ftLight.text), 'N14 零命中时兜底自动跑：工具层直接报出"哪份文件哪一行字面出现过"')
+  const hitLight = await gTool.execute({ action: 'light', query: 'AA1' })
+  ok(!/字面出现过|零命中/.test(hitLight.text), 'N15 有起点时不跑兜底（白读一遍盘＝无谓成本，只在零命中付一次）')
   disposerN()
   ok(existsSync(path.join(dirN, 'graph.json')), 'N11 图文件真在盘上（不是只在内存里算过）')
 
@@ -677,6 +682,45 @@ function makeCorpus(dir) {
     ok(/没进图/.test(r12.markdown) && r12.counts.warn >= 1,
       'P12 新条目**压根没进图**（不在扫描范围/被上限截掉）⇒ warn 指路"检查标题格式"（不是静默当已登记）')
   }
+}
+
+// ————————————————————————————————— Q 零命中兜底：域内正文全文扫描（2026-10-02 与内核同口径移植）
+{
+  const qdir = path.join(tmp, 'qcorpus')
+  mkdirSync(path.join(qdir, 'notes', 'drafts'), { recursive: true })
+  writeFileSync(path.join(qdir, 'notes', 'entry.md'), L('### AA9 记一笔', '- **触发**：随口一问', '',
+    '正文里提到 Qwen3-8B 这个模型名，但它不在任何标题或触发行里。', ''), 'utf8')
+  writeFileSync(path.join(qdir, 'notes', 'plain.md'), L('# 散记', '', '这里也提了一次 Qwen3-8B（普通正文，不属于任何条目体）。', ''), 'utf8')
+  writeFileSync(path.join(qdir, 'notes', 'drafts', 'hidden.md'), L('# 草稿', '', '这里也写着 Qwen3-8B，但整个目录被资料面排除。', ''), 'utf8')
+  writeFileSync(path.join(qdir, 'notes', 'big.md'), '# 大档\n\n' + 'x'.repeat(6000) + ' BigOnlyWord\n', 'utf8')
+  writeFileSync(path.join(qdir, 'notes', 'flood.md'), L('# 泛词', '', ...Array.from({ length: 50 }, () => '这一行里反复出现结构词结构词'), ''), 'utf8')
+  const cfgQ = { dataDir: path.join(tmp, 'qstate'), memoryRoots: [qdir], legacyKeyFiles: [], graphStaleHours: 24, graphMaxFiles: 200, graphMaxBytes: 4000 }
+  V.appendSurface(cfgQ.dataDir, { op: 'add-exclude', pattern: 'notes/drafts/', by: 'user' })
+  const foldQ = () => V.foldSurface(cfgQ.dataDir)
+  const gQ = GR.build(cfgQ, foldQ(), { maxFiles: 200, maxBytes: 4000 }).graph
+  const ft = (q) => GR.fulltextFallback(cfgQ, foldQ(), gQ, q, { maxBytes: 4000, maxFiles: 200 })
+
+  const f1 = ft('Qwen3-8B')
+  ok(/字面出现过/.test(f1) && /entry\.md/.test(f1) && /〔条目体·AA9〕/.test(f1),
+    'Q1 零命中兜底：报"哪份文件哪一行字面出现过"，命中落在已登记条目体内还标出编号（可接着 light AA9）')
+  ok(/L\d+ .*Qwen3-8B/.test(f1), 'Q2 每条命中带行号＋原文片段（文件内容仍要自己 read，不替人下结论）')
+  ok(/〔正文〕/.test(f1), 'Q3 不在条目体里的命中标〔正文〕（两种标记并存，不混为一谈）')
+  ok(!/hidden\.md/.test(f1), 'Q4 被资料面排除的目录不进扫描面（扫描面与起点域同源，不留第二份范围真相）')
+  ok(!/big\.md/.test(f1), 'Q4b 超大小门的文件不进命中（不拖慢兜底）')
+  const fn = ft('qwen38b')
+  ok(/〔归一匹配〕/.test(fn) && /entry\.md/.test(fn), 'Q5 大小写/连字符手滑由第二轮"归一"兜，并披露用了哪轮（与起点解析同一风格）')
+  const fz = ft('一个从来没出现过的词')
+  ok(/已扫 \*\*\d+\*\* 份/.test(fz) && /零命中/.test(fz), 'Q6 零命中**如实报数**（"空手"必须可判读：扫了几份）')
+  ok(/被排除的目录/.test(fz) && /跨行断词/.test(fz), 'Q6b 零命中给三种可能（把"没这份资料"与"被排除/被挡"分开，不糊成一句"查不到"）')
+  const fbig = ft('BigOnlyWord')
+  ok(/不在扫描面/.test(fbig) && /big\.md/.test(fbig), 'Q7 只在超门文件里出现的词 ⇒ 零命中但仍**点名**那份被挡的档（旧口径这里静默消失）')
+  const ff = ft('结构词')
+  ok(/命中过多/.test(ff) && /疑似结构词/.test(ff) && !/字面出现过/.test(ff), 'Q8 泛词闸：超 40 行只报文件级计数并明说命中过多（不静默中截）')
+  ok(/不代表这就是答案/.test(f1), 'Q9 免责句在场：只报"字面出现过" ≠ 这就是答案（同词不同题是常态）')
+  const rq = GR.resolveStarts(gQ, 'Qwen3-8B')
+  const rtxt = GR.render(gQ, 'Qwen3-8B', rq, GR.subgraph(gQ, rq.starts, {}), GR.status(cfgQ, foldQ(), { maxAgeHours: 24, maxFiles: 200 }), { fulltext: f1 })
+  ok(rq.starts.length === 0 && rtxt.indexOf('字面出现过') > 0 && rtxt.indexOf('字面出现过') < rtxt.indexOf('线索'),
+    'Q10 零命中页里**事实排在线索之前**（"在哪儿出现过"可验证，"像哪个"是猜的）')
 }
 
 // ————————————————————————————————— K 文档与代码对账（四份文档最容易坏在漂移，让它当场变红）

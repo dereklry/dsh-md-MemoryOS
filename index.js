@@ -22,7 +22,7 @@ import { makeProbes, probeAll, stepAll, envOf } from './lib/probes.js'
 import { foldSetup, recordSetup, probeJev } from './lib/setup.js'
 import { makeKeystore, KEY_REF } from './lib/keystore.js'
 import { foldSurface, appendSurface, surfaceView, effectiveRoots, badRoot, badPattern, preview, MANAGED_EXTS } from './lib/surface.js'
-import { build as buildGraph, load as loadGraph, status as graphStatus, check as graphCheck, checkText, resolveStarts, subgraph, render as renderLight, graphFile } from './lib/graph.js'
+import { build as buildGraph, load as loadGraph, status as graphStatus, check as graphCheck, checkText, resolveStarts, subgraph, render as renderLight, graphFile, fulltextFallback } from './lib/graph.js'
 import { run as runArchiveGate } from './lib/archive.js'
 
 /** 路径归一（账本与提示都用正斜杠、去尾斜杠；只用于比较与显示，不改写用户传入的原样值） */
@@ -47,7 +47,7 @@ export function readCfg(config) {
     // 指针图（本包自建，纯 JS，落 <dataDir>/graph.json）：多久算过期、最多扫多少文件
     graphStaleHours: Number(c.graphStaleHours) > 0 ? Number(c.graphStaleHours) : 24,
     graphMaxFiles: Number(c.graphMaxFiles) > 0 ? Number(c.graphMaxFiles) : 2000,
-    graphMaxBytes: Number(c.graphMaxBytes) > 0 ? Number(c.graphMaxBytes) : 1_500_000,
+    graphMaxBytes: Number(c.graphMaxBytes) > 0 ? Number(c.graphMaxBytes) : 8_000_000,
     keyFile: c.keyFile || envOf('JEV_KEY_FILE') || join(dataDir, 'jev-key.txt'),
     baseUrl: String(c.baseUrl || envOf('JEV_BASE_URL') || 'https://api.typesafe.ai').replace(/\/+$/, ''),
     model: c.model || envOf('JEV_MODEL') || 'jev-latest',
@@ -434,7 +434,15 @@ export function apply(ctx, config) {
       const res = resolveStarts(g, q, { maxStarts: 6 })
       const sub = subgraph(g, res.starts, { depth, maxNodes: Number(body.max_nodes) > 0 ? Number(body.max_nodes) : 45 })
       const st = graphStatus(cfg, folded, { ...opts, maxAgeHours: cfg.graphStaleHours })
-      return { ok: true, message: renderLight(g, q, res, sub, st, { depth }), matched: res.starts.length, level: res.level, nodes: sub.nodes.length, edges: sub.edges.length, stale: st.stale }
+      // 零命中才跑"域内正文兜底"（现扫现查、零账）：只在图里没起点时才付这份读盘成本，
+      // 而且**事实排在形近候选之前**——与内核同序（见 graph.fulltextFallback 的三条纪律）。
+      const ft = res.starts.length ? '' : fulltextFallback(cfg, folded, g, q, { maxBytes: cfg.graphMaxBytes, maxFiles: cfg.graphMaxFiles })
+      return {
+        ok: true,
+        message: renderLight(g, q, res, sub, st, { depth, fulltext: ft }),
+        matched: res.starts.length, level: res.level, nodes: sub.nodes.length, edges: sub.edges.length, stale: st.stale,
+        fulltext: ft ? ft.split('\n')[0] : '',
+      }
     }
     if (action === 'check') {
       const out = graphCheck(cfg, folded, g, { ...opts, maxAgeHours: cfg.graphStaleHours })
@@ -452,10 +460,11 @@ export function apply(ctx, config) {
   reg(defineTool({
     name: 'memoryos_graph',
     description:
-      'MemoryOS 的**指针图**（本包自建、纯本地、零账）：`build` 扫管理范围内的 .md 建图；`light` 按词查子图并解释"为什么牵动这份文件"；`check` 出盲区清单；`status` 看水位；'
+      'MemoryOS 的**指针图**（本包自建、纯本地、零账）：`build` 扫管理范围内的 .md 建图；`light` 按词查子图并解释"为什么牵动这份文件"，**零命中时自动做"域内正文全文扫描"**（报"这个词在哪个文件的哪一行字面出现过"，并如实报"已扫 N 份"）；`check` 出盲区清单；`status` 看水位；'
       + '`archive-check` ＝**提交前归档闸**：只看"本次未提交的新增"——新档没人引用（忘了登记）⇒ warn、文件头 `指针条目=AAx` 悬空 ⇒ warn、本轮新条目没人回指 ⇒ info；'
       + '**只报事实、不改文件、不挡提交**，拿到 warn 自己判断；确属一次性别档就在文件头写 `> 归档：免索引（理由）`（会列进"豁免清单"）。全库结构体检走 `check`，别混用。'
       + '只索引**标题/条目号/触发行/标准 Markdown 链接/反引号路径/「§三 AA14」式指针**，正文不进图 ⇒ 查回来的是**地图不是内容**：要读文件仍得自己 read，引入前仍要过筛。'
+      + '**零命中的兜底**：`light` 会现扫一遍管理范围内的 `.md` 正文，报"字面出现在哪个文件的哪一行"（两轮：先原样、再归一键；只报字面、**不代表这就是答案**）；一句都没有时也会如实报"已扫 N 份、零命中"，并点出"另有 N 份不在扫描面（超大小门/建图后被截）"——**别把"空手"讲成"没有这份资料"**。'
       + '起点解析分两级并披露：先精准（原样/条目号/归一/子串/触发行），全空才进变体（归一子串/删一字/词相似度），输出会写明用了哪一级——**别把变体命中当精准命中汇报**。'
       + '`check` 报的三类问题都不报错、只能靠体检发现：有资料没触发行（索引匹配不上）、条目孤立（写了没人指）、引用未解析（指向改名或不存在的资料）。'
       + '图是派生缓存：删了可重建；改了资料就 build 一次（面板「资料面」页也有重建按钮）。',
