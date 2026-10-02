@@ -3,7 +3,7 @@
  *
  * 跑法（本机没有 node 在 PATH 时，用 app 当 node；有 node 就直接 `node test/load.js`）：
  *   $env:ELECTRON_RUN_AS_NODE=1
- *   & '<DSH Desktop 的可执行文件>' test\load.js
+ *   & "<DSH Desktop 的可执行文件>" test\load.js   ← Electron 套壳自带 node，用 ELECTRON_RUN_AS_NODE 当 node 用
  * 依赖替身：@deepseek-ai/dsh-tools 由 test/stub-dsh-tools.mjs 顶掉；Jev 传输可注入 ⇒
  * 同事与 CI 只需 node ≥18，**闸全程不联网**。
  *
@@ -19,7 +19,7 @@
 import assert from 'node:assert/strict'
 import { registerHooks } from 'node:module'
 import { pathToFileURL } from 'node:url'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync, existsSync, utimesSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync, existsSync, utimesSync, readdirSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -677,9 +677,22 @@ function makeCorpus(dir) {
   }
   const all = Object.values(docs).join('\n')
 
-  // K1 共享项目不得夹带维护者本机私货（仓名/账本名/条目号）
-  const leak = all.match(/X-workspace|X-ops|X-flow|X-INDEX\.md|WX1[0-9]|proj_x_|\.venv[\\/]Scripts/g) || []
+  // K1 共享项目不得夹带维护者本机私货——**按"形状"查，不按"我自己的仓名"查**：
+  // 把维护者的仓名/账本名写进闸本身，也是一种夹带（旧版就是这样），所以判据只认三类形状：
+  //   ① 盘符绝对路径里的真实目录（Users／DSH-／Program／工作／mnt）；② 私有条目号体系 `W[ABC]\d`；③ 私有表键前缀 `proj_`。
+  const LEAK = /[A-Za-z]:[\\/](?:Users|DSH-|Program|工作|mnt)|\/mnt\/data|\bW[ABC]\d{1,2}\b|\bproj_[a-z_]+/g
+  const leak = all.match(LEAK) || []
   ok(leak.length === 0, `K1 文档不夹带维护者本机私货（命中 ${leak.length}：${[...new Set(leak)].join(' ')}）`)
+
+  // K1b 代码与面板同一把尺子（K1 原先只扫文档 ⇒ 私货正是从代码里漏出去过：本机路径 + 私有条目号当示例）
+  const codeFiles = ['index.js', 'client.js', 'package.json', 'cordis.patch.yml',
+    ...readdirSync(path.join(PKG, 'lib')).filter((f) => f.endsWith('.js')).map((f) => join('lib', f))]
+  const codeLeak = []
+  for (const f of codeFiles) {
+    const hits = readFileSync(path.join(PKG, f), 'utf8').match(LEAK) || []
+    if (hits.length) codeLeak.push(`${f}=${[...new Set(hits)].join('/')}`)
+  }
+  ok(codeLeak.length === 0, `K1b 代码/面板也不夹带（命中：${codeLeak.join(' ') || '无'}）`)
 
   // K2 文档里出现的工具名必须是真注册的
   // 真实工具名从代码里抽（手抄清单自己就会漂移——本轮 K2 当场抓到这件事）
