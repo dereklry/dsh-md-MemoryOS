@@ -505,9 +505,9 @@ function makeCorpus(dir) {
   ok(!/wikilink/.test(JSON.stringify(g2)), 'M14c 不再有 wikilink 边（那是搬代码时夹带的语法、内核不认，已按拍板删除）')
   const stFresh = GR.status(cfgG, foldG(), { maxAgeHours: 24, maxFiles: 500 })
   ok(stFresh.exists && stFresh.stale === false && stFresh.changed === 0, 'M15 刚建完＝水位新、无未入图改动')
-  const outText = GR.render(g2, 'AA1', r1, sub2, stFresh, { depth: 2 })
+  const outText = GR.render(g2, 'AA1', r1, sub2, stFresh, { depth: 2, expand: true })
   ok(/亮起子图/.test(outText) && /起点解析＝\*\*精准/.test(outText) && /建议读/.test(outText) && /地图不是内容/.test(outText),
-    'M16 渲染出的就是给人看的那页（水位＋解析级别＋边＋建议读＋"地图不是内容"的提醒）')
+    'M16 expand:true 才渲染邻域地图那页（水位＋解析级别＋边＋建议读＋"地图不是内容"的提醒）')
   ok(/没找到起点/.test(GR.render(g2, 'ZZZ 完全无关的词', r4, GR.subgraph(g2, r4.starts, {}), stFresh, {})), 'M17 查不到时的输出教用户补触发行，而不是劝人改标题')
 
   const stamp = Date.now()
@@ -573,7 +573,11 @@ function makeCorpus(dir) {
   const ls = await gTool.execute({ action: 'status' })
   ok(/指针图/.test(ls.text) && /节点/.test(ls.text), `N7 status 动作给人话（${ls.text.slice(0, 40)}…）`)
   const li = await gTool.execute({ action: 'light', query: 'AA1' })
-  ok(/亮起子图/.test(li.text) && /建议读/.test(li.text), 'N8 light 动作返回可读子图与建议读清单（模型能直接照做）')
+  ok(/落点/.test(li.text) && /〔条目体·AA1〕/.test(li.text) && /manual\.md/.test(li.text) && li.text.split('\n').length <= 6,
+    'N8 ★ light 默认＝落点清单（跳过目录直达条目+文件：文件＋条目号＋行号，≤6 行）')
+  ok(!/亮起子图|建议读/.test(li.text), 'N8b ★ 默认不给邻域地图（要地图＝expand:true）')
+  const liExp = await gTool.execute({ action: 'light', query: 'AA1', expand: true })
+  ok(/亮起子图/.test(liExp.text) && /建议读/.test(liExp.text), 'N8c expand:true 才给邻域地图（旧契约保留）')
   const ck = await gTool.execute({ action: 'check' })
   ok(/体检：/.test(ck.text) && /AA3/.test(ck.text), 'N9 check 动作把盲区端出来（AA3 那条缺触发行＋没人指）')
   const bad = await gTool.execute({ action: 'nope' })
@@ -746,6 +750,11 @@ function makeCorpus(dir) {
   ok(new RegExp(`${rob.overbroad.n} 个起点`).test(rtxt2) && rtxt2.split('\n').length <= 3,
     'Q11b ★ 过泛查询只回一个数（≤3 行）：不展开图、不给候选、不接兜底段')
   ok(!/亮起子图|字面出现过|线索/.test(rtxt2), 'Q11c ★ 过泛时其余细节全部隐去（用户口径：只报一个数）')
+  // Q12 落点契约（2026-10-02 用户定）：文件起点默认只给一行落点，不展开邻域
+  const rf = GR.resolveStarts(gQ2, 'flood')
+  const rftxt = GR.render(gQ2, 'flood', rf, GR.subgraph(gQ2, rf.starts, {}), GR.status(cfgQ, foldQ(), { maxAgeHours: 24, maxFiles: 200 }), {})
+  ok(/〔文件〕/.test(rftxt) && rftxt.split('\n').length <= 5 && !/亮起子图/.test(rftxt),
+    'Q12 ★ 文件起点默认＝一行落点（不展开邻域；要地图＝expand:true）')
 }
 
 // ————————————————————————————————— K 文档与代码对账（四份文档最容易坏在漂移，让它当场变红）
@@ -864,6 +873,10 @@ function makeCorpus(dir) {
   ok(/过泛/.test(docs['docs/AGENT-GUIDE.md']) && /别追问/.test(docs['docs/AGENT-GUIDE.md']), 'K10b AGENT-GUIDE 告诉模型：过泛时照实转述、别替它展开')
   ok(/过泛/.test(docs['docs/JUDGMENTS.md']) && /半张图/.test(docs['docs/JUDGMENTS.md']), 'K10c JUDGMENTS 用实测数字交代了"过泛为什么不给细节"')
   ok(/过泛/.test(docs['README.md']) && /过泛/.test(docs['docs/WORKFLOW.md']), 'K10d README 与 WORKFLOW 同步过泛口径')
+  // K11 落点契约（2026-10-02 用户定：工具只负责跳过目录直达条目+文件，默认输出必须小）
+  ok(/LIGHT_MAX_POINTS/.test(docs['docs/DESIGN.md']) && /expand:true/.test(docs['docs/DESIGN.md']), 'K11a DESIGN 写落点默认＋expand 才给地图＋上限')
+  ok(/落点清单/.test(docs['docs/AGENT-GUIDE.md']) && /expand:true/.test(docs['docs/AGENT-GUIDE.md']), 'K11b AGENT-GUIDE 教模型：默认只有落点，要地图才 expand')
+  ok(/落点/.test(docs['README.md']) && /自带索引/.test(docs['docs/JUDGMENTS.md']), 'K11c README 与 JUDGMENTS 同步（判决＝工具不重做目录）')
 
   // K7 契约与前后端一致：patch id、槽位、前缀三处不得各自漂移
   const patch = readFileSync(path.join(PKG, 'cordis.patch.yml'), 'utf8')

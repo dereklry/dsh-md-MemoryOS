@@ -431,15 +431,20 @@ export function apply(ctx, config) {
       const q = String(body.query || '').trim()
       if (!q) return { ok: false, message: 'light 需要 query（要查的词/条目号/文件名）' }
       const depth = Number(body.depth) > 0 ? Math.min(3, Number(body.depth)) : 2
+      // 默认＝**落点清单**（md 自带索引 ⇒ 工具只负责"跳过目录、直达搜索词所在的条目+文件"）；
+      // 只有 expand:true 才展开邻域地图——顺带省掉一次 BFS（默认路径不再付这份成本）。
+      const expand = body.expand === true || String(body.expand).toLowerCase() === 'true'
       const res = resolveStarts(g, q, { maxStarts: 6 })
-      const sub = subgraph(g, res.starts, { depth, maxNodes: Number(body.max_nodes) > 0 ? Number(body.max_nodes) : 45 })
+      const sub = (expand && res.starts.length)
+        ? subgraph(g, res.starts, { depth, maxNodes: Number(body.max_nodes) > 0 ? Number(body.max_nodes) : 45 })
+        : { nodes: [], edges: [], capped: false }
       const st = graphStatus(cfg, folded, { ...opts, maxAgeHours: cfg.graphStaleHours })
       // 零命中才跑"域内正文兜底"（现扫现查、零账）；**过泛查询不跑**——它的答案只有一句"问得太泛"，
       // 扫一遍库再列细节等于把上下文烧在噪声上（用户 2026-10-02 口径：过泛只报一个数）。
       const ft = (res.starts.length || res.overbroad) ? '' : fulltextFallback(cfg, folded, g, q, { maxBytes: cfg.graphMaxBytes, maxFiles: cfg.graphMaxFiles })
       return {
         ok: true,
-        message: renderLight(g, q, res, sub, st, { depth, fulltext: ft }),
+        message: renderLight(g, q, res, sub, st, { depth, expand, fulltext: ft }),
         matched: res.starts.length, level: res.level, nodes: sub.nodes.length, edges: sub.edges.length, stale: st.stale,
         fulltext: ft ? ft.split('\n')[0] : '',
       }
@@ -460,18 +465,22 @@ export function apply(ctx, config) {
   reg(defineTool({
     name: 'memoryos_graph',
     description:
-      'MemoryOS 的**指针图**（本包自建、纯本地、零账）：`build` 扫管理范围内的 .md 建图；`light` 按词查子图并解释"为什么牵动这份文件"，**零命中时自动做"域内正文全文扫描"**（报"这个词在哪个文件的哪一行字面出现过"，并如实报"已扫 N 份"）；`check` 出盲区清单；`status` 看水位；'
+      'MemoryOS 的**指针图**（本包自建、纯本地、零账）：`build` 扫管理范围内的 .md 建图；`light` 按词**给落点**（默认，见下）；`check` 出盲区清单；`status` 看水位；'
+      + '**`light` 默认＝落点清单**（2026-10-02 起）：md 文档自带索引（人/模型本就能逐级读），工具的职责是**跳过目录、直达"搜索词所在的条目+文件"**——所以默认每行＝`文件` 〔条目体·编号／文件／名字〕 L行号 · 短标题，上限 12 条、超出如实报"另 N 处"；**正文不在这里给**，要内容 `read` 那个文件（带 offset）。'
+      + '**要邻域地图**（谁指谁＋reason＋建议读，可能很大）＝加 `expand:true`；默认路径连 BFS 都不跑（省上下文）。'
       + '`archive-check` ＝**提交前归档闸**：只看"本次未提交的新增"——新档没人引用（忘了登记）⇒ warn、文件头 `指针条目=AAx` 悬空 ⇒ warn、本轮新条目没人回指 ⇒ info；'
       + '**只报事实、不改文件、不挡提交**，拿到 warn 自己判断；确属一次性别档就在文件头写 `> 归档：免索引（理由）`（会列进"豁免清单"）。全库结构体检走 `check`，别混用。'
-      + '只索引**标题/条目号/触发行/标准 Markdown 链接/反引号路径/「§三 AA14」式指针**，正文不进图 ⇒ 查回来的是**地图不是内容**：要读文件仍得自己 read，引入前仍要过筛。'
+      + '只索引**标题/条目号/触发行/标准 Markdown 链接/反引号路径/「§三 AA14」式指针**，正文不进图 ⇒ 查回来的是**落点或地图，不是内容**：要读文件仍得自己 read，引入前仍要过筛。'
       + '**零命中的兜底**：`light` 会现扫一遍管理范围内的 `.md` 正文，报"字面出现在哪个文件的哪一行"（两轮：先原样、再归一键；只报字面、**不代表这就是答案**）；一句都没有时也会如实报"已扫 N 份、零命中"，并点出"另有 N 份不在扫描面（超大小门/建图后被截）"——**别把"空手"讲成"没有这份资料"**。'
       + '起点解析分两级并披露：先精准（原样/条目号/归一/子串/触发行），全空才进变体（归一子串/删一字/词相似度），输出会写明用了哪一级——**别把变体命中当精准命中汇报**。'
+      + '**过泛＝只报一个数**（起点 >8 个／正文 >40 行时不给细节）——那不是"没这份资料"，换个更具体的词。'
       + '`check` 报的三类问题都不报错、只能靠体检发现：有资料没触发行（索引匹配不上）、条目孤立（写了没人指）、引用未解析（指向改名或不存在的资料）。'
       + '图是派生缓存：删了可重建；改了资料就 build 一次（面板「资料面」页也有重建按钮）。',
     parameters: {
       action: { type: 'string', required: true, description: 'status | build | light | check | archive-check' },
       query: { type: 'string', required: false, description: '仅 light：要查的词、条目号（如 AA14）或文件名' },
-      depth: { type: 'number', required: false, description: '仅 light：子图深度 1~3（默认 2；越大越费上下文）' },
+      expand: { type: 'boolean', required: false, description: '仅 light：要邻域地图（谁指谁＋reason）＝true；默认 false 只给落点清单（小而直达）' },
+      depth: { type: 'number', required: false, description: '仅 light+expand:true：子图深度 1~3（默认 2；越大越费上下文）' },
       max_nodes: { type: 'number', required: false, description: '仅 light：子图最多多少节点（默认 45）' },
       reason: { type: 'string', required: false, description: '仅 build：为什么重建（面板与账本会显示；建图本身零账）' },
       file: { type: 'string', required: false, description: '仅 archive-check·调试：只查这一份（默认按 git 未提交新增自动收集）' },
