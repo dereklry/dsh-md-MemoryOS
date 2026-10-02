@@ -281,7 +281,7 @@ export function apply(ctx, config) {
     description:
       '读 MemoryOS 功能面板的真实状态：每个功能是 生效中/已关/待配置/降级/不可用/未实现，是谁定的（用户还是模型）、理由与时间，'
       + '缺哪个依赖、还差哪一步（以及那一步该谁做）。判断"某功能为什么没生效"、"该不该建议用户开它"先读这个，别猜。',
-    parameters: { feature: { type: 'string', required: false, description: '只看某个功能（如 jev-engine / radar / mining）；省略＝全量摘要' } },
+    parameters: { feature: { type: 'string', required: false, description: '只看某个功能（如 jev-engine / graph-search / mining）；省略＝全量摘要' } },
     output: { schema: 'text' },
     async execute({ feature }) {
       try {
@@ -337,8 +337,10 @@ export function apply(ctx, config) {
       + 'action=probe 真发一次极小 Jev 请求测通并记入配置账本（默认 7 天内算新鲜）；action=save-key 代用户把 Key 存好'
       + '（**优先存宿主凭据面 ref=JEV_API_KEY**——它在 ~/.dsh/.credentials.yaml：不在任何 git 仓里、升级不会覆盖、0600；'
       + '若只能落文件，落在 git 工作树内会被直接拒）；action=where-key 看 Key 现在在哪（只回掩码）；action=list 看配置账本与待办。'
-      + '典型顺序：save-key（或用户自己存好）→ probe → 成功后才 memoryos_switch(feature=jev-engine,value=on)。'
-      + 'probe 失败就**别去开**，把失败原因转告用户；明文 Key 永不进账本、日志或返回值。',
+      + '典型顺序：save-key（或用户自己存好）→ probe → 成功后那行状态才记成"通道已就绪"。'
+      + '**注意：本包不含语义寻路**——这里只验证"通道通不通"，它不会给"这件事该读哪份资料"的答案；'
+      + '要查资料一律用 memoryos_graph（`light` 落点／零命中正文兜底）。'
+      + 'probe 失败就把失败原因转告用户；明文 Key 永不进账本、日志或返回值。',
     parameters: {
       action: { type: 'string', required: true, description: 'probe | save-key | where-key | list' },
       reason: { type: 'string', required: true, description: '这次动作为什么做（会落账、面板显示）' },
@@ -427,7 +429,7 @@ export function apply(ctx, config) {
     }
     const g = loadGraph(cfg)
     if (!g) return { ok: false, message: `图还不存在（${graphFile(cfg.dataDir)}）：先跑 memoryos_graph(action='build')` }
-    if (action === 'light' || action === 'lookup' || action === 'find') {
+    if (action === 'light' || action === 'lookup') {
       const q = String(body.query || '').trim()
       if (!q) return { ok: false, message: 'light 需要 query（要查的词/条目号/文件名）' }
       const depth = Number(body.depth) > 0 ? Math.min(3, Number(body.depth)) : 2

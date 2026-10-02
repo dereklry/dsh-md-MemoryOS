@@ -52,15 +52,14 @@
         # ---- 各功能的出厂默认（等价 lib/features.js 的 default，但低于切换账本）----
         # 每个键＝面板上一行，也是 switches.jsonl 里的 override key（**热生效不重启**）。
         # 长期改默认动这里；临时改就在面板上切（面板/工具写的都是账本，优先于这里）。
-        # impl=todo 的项（radar/graph-search/scaffold/mining/maintain）现在还不给按钮，先占位。
+        # impl=todo 的项（scaffold/mining/maintain）现在还不给按钮，先占位。
+        # 2026-10-02 与代码对齐（用户令）：删掉 find / radar 两键——登记了本包从未实现的能力＝假开。
+        # 要接语义寻路（find）：先有描述池 + transport + 注入式闸，口径见 docs/JUDGMENTS.md §5.6。
         defaults:
           panel: true # 设置里这一节本身。关掉＝本节从导航消失，只能回这里改 true 恢复
           health: true # 状态与依赖体检（每行现算：生效中/已关/待配置/降级/不可用/未实现）
           switch-ledger: true # append-only 开关账本（谁做的、理由、时间）
-          jev-engine: false # 语义通道配好备用：Key 到位 → 测通 → 才置生效。**按需调用的工具，不是每回合主力**（2026-10-02 定位）
-          find: false # 按需语义寻路（只有事、没有词时按次调一次）＝语义能力的主力形态；未实现，先占位
-          radar: false # 资料亮起（**旧形态**：每回合开场自动指路）：**2026-10-02 已降级为默认关**（每回合固定计费点＋输入要人维护＋词法/正文兜底已覆盖大多数场景）；
-                        # 语义能力本身保留为"按需可调用的工具"（见 find / jev-engine）。要退回旧形态的开发者显式改 true（理由＝docs/JUDGMENTS.md §5.5）
+          jev-engine: false # **只管凭据与通道测通**（存/取 Key + 真发一次极小请求测通）；本包不含语义寻路，也不做每回合自动指路
           graph-search: true # 指针图检索：词→文件/行，本地自算，零账
           scaffold: false # 首次建档：扫记忆根 → 生成四层骨架 + 资料表初稿（一次性）
           mining: true # 候选生成：查空的词→别名、反复读的文件→资料表行（只出候选，人确认才落表）

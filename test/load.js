@@ -77,18 +77,14 @@ function makeCorpus(dir) {
   ok(F.FEATURES.filter((f) => f.controller === 'llm').every((f) => f.impl === 'todo' || f.steps.length > 0), 'A5 凡"由模型执行"的活功能都必须有 steps（否则它该是一键开关）')
   ok(F.FEATURES.every((f) => f.cost && f.what && f.label), 'A6 每项都有显示名／做什么／成本三件套')
   ok(F.FEATURES.every((f) => F.GROUPS.includes(f.group)), 'A7 每项都归到已知组')
-  // A8 ★ radar 降级为默认不开启（2026-10-02 用户拍板）——默认值 + 说明 + 文档三处钉住
-  const rd = F.featureOf('radar')
-  ok(rd && rd.default === false, 'A8 ★ radar 出厂默认＝false（降级为默认不开启：装上也零花费，要试须显式 opt-in）')
-  ok(rd.impl === 'todo' && /降级/.test(rd.what) && /JUDGMENTS/.test(rd.what), 'A8b radar 仍是 todo（降级≠已实现），且登记说明自述"已降级"并指向 JUDGMENTS（面板/工具读到的话不误导）')
-  ok(/默认关|零花费/.test(rd.cost), 'A8c radar 的成本行写明"默认关＝零花费"（用户看成本那一栏就懂）')
-  // A9 语义能力的新形态（2026-10-02 用户口径：**只提供 jev 工具，可调用、但不是主力**）
-  const je = F.featureOf('jev-engine'), fd = F.featureOf('find')
-  ok(je && /按需/.test(je.what) && /不是每回合主力/.test(je.what), 'A9 jev-engine 定位＝"按需可调用的工具"，明写不是每回合主力')
-  ok(fd && fd.default === false && fd.impl === 'todo' && fd.controller === 'llm' && (fd.steps || []).length === 2,
-    'A9b 新增 `find`（按需语义寻路）＝未实现 / 默认关 / 模型执行 + 两步前置（Key→测通）')
-  ok(fd && /主力形态/.test(fd.what) && /不调不花/.test(fd.cost), 'A9c find 的说明写明"这才是语义能力的主力形态"，成本写明"不调不花"')
-  ok(/按需/.test(rd.what) && /旧形态/.test(rd.what), 'A9d radar 的说明写明它是"旧形态"、语义能力改走"按需工具"（三处口径一致）')
+  // A8 ★ 2026-10-02 与代码对齐（用户令）：**不许在登记表里承诺不存在的能力**
+  ok(!F.featureOf('radar'), 'A8 ★ `radar`（每回合自动指路）**不在登记表**——本包从未实现它，登记＝面板上承诺不存在的能力')
+  ok(!F.featureOf('find'), 'A8b ★ `find`（按需语义寻路）**不在登记表**——同上；要接必须先有描述池/transport/注入式闸（JUDGMENTS §5.6）')
+  const je = F.featureOf('jev-engine')
+  ok(je && /不含寻路|不含语义寻路/.test(je.label + je.what) && !/`find`/.test(je.what),
+    'A8c `jev-engine` 只描述"凭据与通道测通"，说明里不指向任何寻路能力（描述与代码对齐）')
+  ok(!/^\s*(radar|find):/m.test(readFileSync(path.join(PKG, 'cordis.patch.yml'), 'utf8')),
+    'A8d 出厂 patch 的 defaults 里也没有 radar/find 两键（登记表外的键写了也不算数 ⇒ 干脆别写）')
 }
 // ————————————————————————————————— B 探针双向同源
 {
@@ -107,9 +103,9 @@ function makeCorpus(dir) {
 }
 // ————————————————————————————————— C 写侧权限
 {
-  const jev = F.featureOf('jev-engine'), panel = F.featureOf('panel'), radar = F.featureOf('radar')
-  ok(S.mayWrite(radar, 'llm', null).ok === false && /未实现/.test(S.mayWrite(radar, 'llm', null).why), 'C1 未实现的功能谁都不给切（面板不许骗人）')
-  ok(S.mayWrite(radar, 'user', null).ok === false, 'C2 未实现 ⇒ 用户也不给切（同一条规则，两套界面不跑偏）')
+  const jev = F.featureOf('jev-engine'), panel = F.featureOf('panel'), td = F.featureOf('mining')
+  ok(S.mayWrite(td, 'llm', null).ok === false && /未实现/.test(S.mayWrite(td, 'llm', null).why), 'C1 未实现的功能谁都不给切（面板不许骗人）')
+  ok(S.mayWrite(td, 'user', null).ok === false, 'C2 未实现 ⇒ 用户也不给切（同一条规则，两套界面不跑偏）')
   ok(S.mayWrite(panel, 'llm', null).ok === false && /仅用户/.test(S.mayWrite(panel, 'llm', null).why), 'C3 模型切"仅用户可切"⇒ 拒，理由可读')
   ok(S.mayWrite(jev, 'llm', { lock: true, by: 'user', ts: 't' }).ok === false && /接管/.test(S.mayWrite(jev, 'llm', { lock: true, by: 'user', ts: 't' }).why), 'C4 用户接管后模型写 ⇒ 拒（粘性）')
   ok(S.mayWrite(jev, 'llm', null).ok === true && S.mayWrite(panel, 'user', null).ok === true, 'C5 配置型功能模型可切；用户永远能切自己的')
@@ -871,19 +867,17 @@ function makeCorpus(dir) {
     [/重标定/, 'K8a⑥ 优化清单第一条＝阈值必须重标定'],
     [/为什么不为它新增/, 'K8a⑦ 交代"为什么不为它加一个已弃用状态档"（防日后有人补一个多余档）'],
   ]) ok(pat.test(jm), msg)
-  ok(/默认不开启|默认关/.test(docs['docs/WORKFLOW.md']) && /JUDGMENTS/.test(docs['docs/WORKFLOW.md']), 'K8b WORKFLOW 回路 ② 写明 radar 默认关并指向理由')
-  ok(/默认不开启|默认关/.test(docs['docs/AGENT-GUIDE.md']) && /别主动建议|别向用户/.test(docs['docs/AGENT-GUIDE.md']), 'K8c AGENT-GUIDE 明写"别主动劝用户开 radar"（模型侧纪律）')
-  ok(/radar/.test(docs['docs/DESIGN.md']) && /5\.5/.test(docs['docs/DESIGN.md']) && /默认关/.test(docs['docs/DESIGN.md']), 'K8d DESIGN 的 radar 行与术语注都指向 §5.5')
-  ok(/radar:\s*false/.test(readFileSync(path.join(PKG, 'cordis.patch.yml'), 'utf8')), 'K8e profile patch 的出厂默认同为 false（登记表与 patch 不能一个开一个关）')
-  ok(/radar/.test(docs['README.md']) && /JUDGMENTS/.test(docs['README.md']), 'K8f README 状态行/使用行同步降级并给理由入口')
+  ok(/不实现|已从登记表删除/.test(docs['docs/WORKFLOW.md']) && /5\.6/.test(docs['docs/WORKFLOW.md']), 'K8b WORKFLOW 写明本包不实现 radar/find 并指向 §5.6')
+  ok(/别主动建议|别建议用户开/.test(docs['docs/AGENT-GUIDE.md']) && /别声称/.test(docs['docs/AGENT-GUIDE.md']), 'K8c AGENT-GUIDE 的模型纪律：别建议开 radar、别声称能调 find')
+  ok(/已从登记表删除/.test(docs['docs/DESIGN.md']) && /5\.6/.test(docs['docs/DESIGN.md']), 'K8d DESIGN 功能表/术语段写明 find/radar 已删并指向 §5.6')
+  ok(/删掉 find \/ radar|不含寻路|不含语义寻路/.test(readFileSync(path.join(PKG, 'cordis.patch.yml'), 'utf8')), 'K8e patch 里对这两键只留"为什么删"的注释，不留键')
+  ok(/不实现、不登记/.test(docs['README.md']) && /JUDGMENTS/.test(docs['README.md']), 'K8f README 状态行写明"不实现、不登记"并给理由入口')
   // K9 语义能力的"新形态"四处同口径（2026-10-02 用户口径：只提供 jev 工具，可调用、但不是主力）
-  ok(/按需/.test(jm) && /不是每回合自动跑/.test(jm), 'K9a JUDGMENTS §5.5 写明新形态＝按需调用（不是每回合自动跑）')
-  ok(/否决/.test(jm) && /删掉/.test(jm), 'K9b §5.5 记了两条否决：每回合自动档不做默认、也不把语义能力删掉')
-  ok(/`find`/.test(docs['docs/DESIGN.md']) && /按需语义寻路/.test(docs['docs/DESIGN.md']), 'K9c DESIGN 的登记表列出 `find`（按需语义寻路）')
-  ok(/find:\s*false/.test(readFileSync(path.join(PKG, 'cordis.patch.yml'), 'utf8')), 'K9d profile patch 也登记了 find 的出厂默认（关）')
-  ok(/按需/.test(docs['docs/AGENT-GUIDE.md']) && /不是每回合主力/.test(docs['docs/AGENT-GUIDE.md']), 'K9e AGENT-GUIDE 告诉模型：语义能力按需调用、不是每回合主力')
-  ok(/按需可调用的工具/.test(docs['README.md']), 'K9f README 状态行写明"语义能力保留为按需可调用的工具"')
-  ok(/未实现 5/.test(docs['docs/WORKFLOW.md']), 'K9g WORKFLOW 概览计数跟上（新增 find ⇒ 未实现 5）')
+  ok(/## 5\.6/.test(jm) && /不提供语义能力/.test(jm) && /与代码对齐/.test(jm), 'K9a JUDGMENTS §5.6＝本包不提供语义能力（与代码对齐）')
+  ok(/描述池/.test(jm) && /transport/.test(jm) && /门控/.test(jm) && /注入式/.test(jm), 'K9b §5.6 给出"要接 find 的前置五件"（描述池/transport/门控/输出契约/注入式闸）')
+  ok(/已从登记表删除/.test(docs['docs/AGENT-GUIDE.md']) && !/主力形态/.test(docs['docs/AGENT-GUIDE.md'] + docs['README.md']), 'K9c 两份面向使用的文档明写"已删"、且不再把它说成"主力形态"')
+  ok(/未实现 3/.test(docs['docs/WORKFLOW.md']), 'K9d WORKFLOW 概览计数跟上（删 radar/find ⇒ 未实现 3）')
+  ok(/已随 2026-10-02 的"与代码对齐"修订而改变落点/.test(jm), 'K9e §5.5 顶部有修订横幅指向 §5.6（旧判决保留、落点已改）')
   // K10 过泛处置口径（2026-10-02 用户定：只报一个数、其他细节直接隐去）——四处同口径
   ok(/MAX_STARTS/.test(docs['docs/DESIGN.md']) && /只回一个数/.test(docs['docs/DESIGN.md']), 'K10a DESIGN 写过泛闸（起点闸 8 / 正文闸 40）与"只回一个数"')
   ok(/过泛/.test(docs['docs/AGENT-GUIDE.md']) && /别追问/.test(docs['docs/AGENT-GUIDE.md']), 'K10b AGENT-GUIDE 告诉模型：过泛时照实转述、别替它展开')
