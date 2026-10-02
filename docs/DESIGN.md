@@ -44,6 +44,7 @@ lib/probes.js         依赖探针 / 步骤探针（纯本地 fs/env，5 秒 TTL
 lib/keystore.js       Key 落点：宿主凭据面优先 + git 工作树守卫 + 掩码；明文只在本机内存过一下
 lib/surface.js         资料面登记（目录并集、排除匹配、扫描计数、试算）
 lib/graph.js           指针图（扫 .md → 节点/边 → graph.json；light 两级解析＋BFS；check 盲区）
+lib/archive.js         归档闸（提交前检查：未提交新增档有没有人引用／回指条目号悬不悬空／新条目有没有人回指）
 lib/api.js            面板 HTTP 面（延迟挂载 + prefix JSON 404 兜底 + 写后回快照）
 test/load.js          离线闸（零网络；条数看输出末行）
 test/stub-dsh-tools.mjs  宿主 dsh-tools 的恒等替身（让闸不依赖 DSH 安装）
@@ -89,9 +90,9 @@ test/stub-dsh-tools.mjs  宿主 dsh-tools 的恒等替身（让闸不依赖 DSH 
 
 `{version, builtAt, tookMs, roots[], stats{files,nodes,edges,unresolved,skippedExcluded,capped}, nodes[{key,kind,name,code,path,line,triggers[]}], edges[{from,to,kind,type,reason}]}`
 
-- 节点 `kind`＝`file`／`entry`（标题条目，带 `triggers[]`）／`name`（H1 题名）；边分 `structural`（contains/titled）与 `reference`（points：wikilink/path/code）。
-- **只索引不抄正文**：标题·条目号·触发行·反引号路径·「§三 XX12」式指针 ⇒ 图小、建得快、确定性（同输入同图），且不把敏感正文复制一份。
-- `unresolved`＝指向不存在资料的引用条数（体检的头号目标）；超 `graphMaxBytes` 的文件跳过并出提示；命中 `graphMaxFiles` ⇒ 标"图不完整"。
+- 节点 `kind`＝`file`／`entry`（标题条目，带 `triggers[]`）／`name`（H1 题名）；边分 `structural`（contains/titled）与 `reference`（points：path/code——`path` 收**反引号路径**与**标准 Markdown 链接** `[文字](路径.md)`，后者挂在文件节点上，与内核同源）。
+- **只索引不抄正文**：标题·条目号·触发行·反引号路径·标准 Markdown 链接·「§三 AA12」式指针 ⇒ 图小、建得快、确定性（同输入同图），且不把敏感正文复制一份。
+- `unresolved`＝指向不存在资料的引用条数（体检的头号目标）；**标准 Markdown 链接解析不到不建边、也不计未解析**（相对链接里的 `../` 与说明性链接太多，倒进来会把真该修的淹掉）；超 `graphMaxBytes` 的文件跳过并出提示；命中 `graphMaxFiles` ⇒ 标"图不完整"。
 - 解析优先级写死：**条目号 > 精确同名 > 归一相等 > 触发行子串 > 标题子串**（曾让子串先跑，把精准命中降级成"原样子串"，披露的依据就变成假的）。
 
 ### 3.3 `<dataDir>/surface.jsonl` —— 资料面（管到哪儿）
@@ -118,6 +119,64 @@ test/stub-dsh-tools.mjs  宿主 dsh-tools 的恒等替身（让闸不依赖 DSH 
 | `/abs/path/x.md` | 绝对路径（同一入口两种口径都试） |
 
 三条实现纪律：**`*`／`**`／少于 3 个实字符的规则一律拒**（那等于悄悄清空资料面）；**加排除前先试算**（`preview`，挡不到一个文件就拒绝落账，避免"以为排除了"）；**profile 基线只读**（插件不代写宿主配置）。
+
+### 3.5 归档契约与归档闸（提交前检查）
+
+**契约的形状是给人写的，不是给工具写的**。第一要求是**没有任何工具时人能逐级钻取**：
+
+```
+入口约束（每轮注入的 md）
+  → 索引文件的一行速查（"有哪几类、去哪看"）
+    → 条目标题（`### AA17 <情形>：<动作/结论>`）
+      → 「触发」行（"这就是我遇到的事"）
+        → 条目体（做法／坑／补充＝结论全文）
+          → 专档 xxx.md（文件开头 `指针条目=AA17` 回指）
+```
+
+`light`（词→文件／行）与归档闸只是**同一着陆点的加速器与检查器**：工具顺着这份形状读，**不要求人按工具的口味写**。
+
+条目形状（一份形状，四方共用）：
+
+```markdown
+### AA17 <情形>：<动作/结论>            ← 一句人话，别写抽象名词
+- **触发**：用户会怎么说这件事（症状词·口语·简称·错字常见写法·工具名/报错名）
+- **做法**：可复用的步骤 / 判据 / 命令（结论全文写这里）
+- **坑**：踩过的、别重犯的（含"我上次误判成 X"）
+- **补充：<日期>**：翻案或追加的新事实＝记忆的前沿
+- **登记**：<日期> | 决策 Dxx | 相关索引 §x | 专档 xxx.md
+```
+
+| 字段 | 给人（钻取） | 给 `light`（零账） | 给归档闸 |
+|---|---|---|---|
+| 条目标题 | 索引一眼判断 | 原子串＝起点词 | 判"这轮新条目进没进图" |
+| 触发行 | "这就是我遇到的事" | **变体档唯一窄面**（错字／简称靠它） | —（不改判定） |
+| 条目体 | 复用正文 | 锚面（写哪儿都可查） | — |
+| 专档回指 | 从条目跳到细节 | 补"文件是叶子"跳不通那一腿 | 判"回指的条目号存不存在" |
+| commit | 留痕 | 时间面取自 git | **闸的范围＝未提交改动** |
+
+**文件头三行契约**（专档自带，必须落在文件开头前 12 行内；写超了等于没写）：
+
+| 写法 | 作用 |
+|---|---|
+| `> 档位：叶子 ｜ 指针条目=AA4` | 声明档位并回指条目：**叶子**（默认，不写就是它）／**中枢**（＝指路文件，逐跳展开；**新中枢不要求别人登记它**——它本身就是索引） |
+| `> 归档：免索引（理由）` | 归档闸的豁免：跳过判定，但**在输出末尾列进「豁免清单」**（豁免必须可见，不静默） |
+
+**指针的真实形态**（都在归档里出现过，闸与图都认）：裸条目号 `AA14`、`（条目 AA14）`、`§三 AA14`、反引号路径 `` `docs\x.md` ``、**标准 Markdown 链接** `[x](x.md)`（第三种最自然——目录索引表天生就这么写）、文件头回指 `指针条目=AAx`。**别写绝对行号**（一编辑就漂移）。
+
+**归档闸**（`memoryos_graph(action='archive-check')`，实现＝`lib/archive.js`）：
+
+- **范围＝"本次"**：各仓 `git status` 的未提交改动（`??`／已暂存 `A`／重命名 `R` 新名）＋从 `git diff` 新增行里认出的 `+### AAx`。**不记 sha、不看历史**；已提交的东西不管（那不是"本次"）。
+- **三条判据**：① 新增档**没有任何别的 .md 引用它** ⇒ warn（＝忘了登记进索引）；有引用但来源不是中枢档 ⇒ info。② 文件头 `指针条目=AAx` **悬空**（图里没这个条目）⇒ warn。③ 本轮新条目**没人引用／回指** ⇒ info；压根没进图 ⇒ warn（标题格式不对）。
+- **豁免**：文件头 `> 归档：免索引（理由）` ⇒ 跳过，但列进豁免清单。
+- **不管**（如实计数）：域外文件、被资料面排除的文件、mirror 快照（`snapshot-`／`_snap_`）、自声明中枢的新档。
+- **纪律**：只 warn／info、**退出码零、绝不改任何文件**——补不补指针由模型／人判断。**全库**结构体检（悬空指针／孤儿／副本／图水位）不在这里，走 `memoryos_graph(action='check')`。
+- **看哪个仓**：默认＝每个生效记忆根各自所属的 git 工作树（自动向上找 `.git`）；记忆根不在仓里时用 `config.archiveRepos` 显式给。
+
+三条实踩的坑（照抄别再踩）：
+
+1. **非 ASCII 路径会被 git 转义**成 `\345\275\222` 并加引号 ⇒ 直接拿去查文件永远 False，症状是"本次新增 1 份、待查 0"的**静默空转**。修法＝调用带 `-c core.quotepath=false` ＋ 解析侧再解一次转义。
+2. **判定要用刷新后的图**：新文件得先入图才有边可查，所以闸默认先按需重建一次图。
+3. **闸只管"本次新增"**，整体漏洞另跑 `check`——把两件事混在一起，闸就会开始报一堆与本次无关的旧账。
 
 ---
 
@@ -207,7 +266,7 @@ test/stub-dsh-tools.mjs  宿主 dsh-tools 的恒等替身（让闸不依赖 DSH 
 | `memoryos_status` | `feature?` | 每个功能一行：状态／控制器／谁定的＋理由＋时间／缺依赖／待办／成本；含账本路径、Key 位置（掩码）与资料面计数 |
 | `memoryos_switch` | `feature`,`value:'on'|'off'`,`reason`（必填） | `✓ 已记一行…` / `✗ 拒绝：<原因>`；开了配置型功能会附"仍差 N 步，面板显示待配置" |
 | `memoryos_setup` | `action:'probe'|'save-key'|'where-key'|'list'`,`reason`（必填）,`feature?`,`key?`,`path?`,`allow_in_repo?` | 测通结果（含延迟与上游摘要）／代存落点与掩码／当前 Key 在哪／配置账本与待办 |
-| `memoryos_graph` | `action:'status'|'build'|'light'|'check'`,`query?`,`depth?`,`max_nodes?`,`reason?` | 图水位／重建结果（节点·边·未解析数）／`light` 亮起子图（带 reason 与解析级别，落空给候选）／`check` 盲区清单 |
+| `memoryos_graph` | `action:'status'|'build'|'light'|'check'|'archive-check'`,`query?`,`depth?`,`max_nodes?`,`reason?`,`file?`,`no_refresh?` | 图水位／重建结果（节点·边·未解析数）／`light` 亮起子图（带 reason 与解析级别，落空给候选）／`check` 盲区清单／**`archive-check` 提交前归档闸**（三条判据的 warn/info 表＋豁免清单；`file?`、`no_refresh?` 只给调试） |
 | `memoryos_surface` | `action:'list'|'add-root'|'drop-root'|'add-exclude'|'drop-exclude'|'preview'`,`path?`,`pattern?`,`reason`（写操作必填） | 资料面现状（每根纳管多少 `.md`、被哪条规则挡多少、样本路径）／增删目录与排除／试算。删 `profile` 基线会被拒；`.md` 之外的类型不放开 |
 
 ### 6.4 面板（`settings.section`，`id:'memoryos'`，`order:120`，label「记忆系统」）
@@ -226,6 +285,7 @@ test/stub-dsh-tools.mjs  宿主 dsh-tools 的恒等替身（让闸不依赖 DSH 
 |---|---|---|
 | `dataDir` | `MEMORYOS_DATA` | 两本账落点（默认 `~/.dsh/memoryos`） |
 | `memoryRoot` | `MD_MEMORY_ROOTS` | 记忆根，`;` 或 `,` 分隔多个 |
+| `archiveRepos` | `MEMORYOS_ARCHIVE_REPOS` | 归档闸看哪些 git 仓（默认＝生效记忆根各自所属的仓，自动向上找 `.git`；记忆根不在仓里时在这里显式给） |
 | `pythonBin` | `MD_PYTHON_BIN` | 内核解释器（读面纯标准库，系统 Python 即可） |
 | `kernelRepo` | `MD_REPO_ROOT` | `pythonBin` 的发现基准 |
 | `graphMaxFiles` | — | 建图最多扫多少份文件（默认 2000；命中会标"图不完整"） |

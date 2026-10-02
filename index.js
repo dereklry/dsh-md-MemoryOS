@@ -23,6 +23,7 @@ import { foldSetup, recordSetup, probeJev } from './lib/setup.js'
 import { makeKeystore, KEY_REF } from './lib/keystore.js'
 import { foldSurface, appendSurface, surfaceView, effectiveRoots, badRoot, badPattern, preview, MANAGED_EXTS } from './lib/surface.js'
 import { build as buildGraph, load as loadGraph, status as graphStatus, check as graphCheck, checkText, resolveStarts, subgraph, render as renderLight, graphFile } from './lib/graph.js'
+import { run as runArchiveGate } from './lib/archive.js'
 
 /** 路径归一（账本与提示都用正斜杠、去尾斜杠；只用于比较与显示，不改写用户传入的原样值） */
 const normPath = (p) => String(p || '').trim().replace(/\\/g, '/').replace(/\/+$/, '')
@@ -39,6 +40,8 @@ export function readCfg(config) {
   return {
     dataDir,
     memoryRoots: roots,
+    // 归档闸看哪些 git 仓：默认=生效记忆根各自所属的仓（同事不会记得配这一项），这里可显式追加
+    archiveRepos: (Array.isArray(c.archiveRepos) ? c.archiveRepos : String(c.archiveRepos || envOf('MEMORYOS_ARCHIVE_REPOS') || '').split(/[;,]/)).map((s) => String(s).trim()).filter(Boolean),
     pythonBin: c.pythonBin || envOf('MD_PYTHON_BIN') || '',
     kernelRepo: c.kernelRepo || envOf('MD_REPO_ROOT') || '',
     // 指针图（本包自建，纯 JS，落 <dataDir>/graph.json）：多久算过期、最多扫多少文件
@@ -413,6 +416,15 @@ export function apply(ctx, config) {
           + `｜落 ${graphFile(cfg.dataDir)}`,
       }
     }
+    // 归档闸（提交前检查）自己会按需刷新图，所以**放在 loadGraph 之前**——否则"还没建图"会先被挡掉
+    if (action === 'archive-check') {
+      const one = String(body.file || '').trim()
+      const r = runArchiveGate(cfg, folded, {
+        files: one ? [one] : undefined,
+        noRefresh: body.no_refresh === true || body.noRefresh === true || String(body.no_refresh || '').toLowerCase() === 'true',
+      })
+      return { ok: r.ok, message: r.markdown, warns: r.warns, counts: r.counts }
+    }
     const g = loadGraph(cfg)
     if (!g) return { ok: false, message: `图还不存在（${graphFile(cfg.dataDir)}）：先跑 memoryos_graph(action='build')` }
     if (action === 'light' || action === 'lookup' || action === 'find') {
@@ -434,23 +446,27 @@ export function apply(ctx, config) {
         ? `指针图：${st.files} 份文件 → ${st.nodes} 节点／${st.edges} 边｜建于 ${st.builtAt}（${st.ageHours}h 前，阈值 ${st.maxAgeHours}h）｜${st.stale ? `**该重建**：${st.changed} 个文件建图后又改了` : '较新'}｜未解析引用 ${st.unresolved}｜落 ${st.file}`
         : `指针图还没建（${st.file} 不存在）：跑 memoryos_graph(action='build')` }
     }
-    return { ok: false, message: `未知动作：${action}（可用 status | build | light | check）` }
+    return { ok: false, message: `未知动作：${action}（可用 status | build | light | check | archive-check）` }
   }
 
   reg(defineTool({
     name: 'memoryos_graph',
     description:
-      'MemoryOS 的**指针图**（本包自建、纯本地、零账）：`build` 扫管理范围内的 .md 建图；`light` 按词查子图并解释"为什么牵动这份文件"；`check` 出盲区清单；`status` 看水位。'
-      + '只索引**标题/条目号/触发行/反引号路径/「§三 AA14」式指针**，正文不进图 ⇒ 查回来的是**地图不是内容**：要读文件仍得自己 read，引入前仍要过筛。'
+      'MemoryOS 的**指针图**（本包自建、纯本地、零账）：`build` 扫管理范围内的 .md 建图；`light` 按词查子图并解释"为什么牵动这份文件"；`check` 出盲区清单；`status` 看水位；'
+      + '`archive-check` ＝**提交前归档闸**：只看"本次未提交的新增"——新档没人引用（忘了登记）⇒ warn、文件头 `指针条目=AAx` 悬空 ⇒ warn、本轮新条目没人回指 ⇒ info；'
+      + '**只报事实、不改文件、不挡提交**，拿到 warn 自己判断；确属一次性别档就在文件头写 `> 归档：免索引（理由）`（会列进"豁免清单"）。全库结构体检走 `check`，别混用。'
+      + '只索引**标题/条目号/触发行/标准 Markdown 链接/反引号路径/「§三 AA14」式指针**，正文不进图 ⇒ 查回来的是**地图不是内容**：要读文件仍得自己 read，引入前仍要过筛。'
       + '起点解析分两级并披露：先精准（原样/条目号/归一/子串/触发行），全空才进变体（归一子串/删一字/词相似度），输出会写明用了哪一级——**别把变体命中当精准命中汇报**。'
       + '`check` 报的三类问题都不报错、只能靠体检发现：有资料没触发行（索引匹配不上）、条目孤立（写了没人指）、引用未解析（指向改名或不存在的资料）。'
       + '图是派生缓存：删了可重建；改了资料就 build 一次（面板「资料面」页也有重建按钮）。',
     parameters: {
-      action: { type: 'string', required: true, description: 'status | build | light | check' },
+      action: { type: 'string', required: true, description: 'status | build | light | check | archive-check' },
       query: { type: 'string', required: false, description: '仅 light：要查的词、条目号（如 AA14）或文件名' },
       depth: { type: 'number', required: false, description: '仅 light：子图深度 1~3（默认 2；越大越费上下文）' },
       max_nodes: { type: 'number', required: false, description: '仅 light：子图最多多少节点（默认 45）' },
       reason: { type: 'string', required: false, description: '仅 build：为什么重建（面板与账本会显示；建图本身零账）' },
+      file: { type: 'string', required: false, description: '仅 archive-check·调试：只查这一份（默认按 git 未提交新增自动收集）' },
+      no_refresh: { type: 'boolean', required: false, description: '仅 archive-check·调试：跳过查前重建（正常要重建，否则新文件没入图、边查不到）' },
     },
     output: { schema: 'text' },
     async execute(args) {

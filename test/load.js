@@ -20,6 +20,7 @@ import assert from 'node:assert/strict'
 import { registerHooks } from 'node:module'
 import { pathToFileURL } from 'node:url'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync, existsSync, utimesSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 
@@ -44,11 +45,13 @@ const P = await import(pathToFileURL(path.join(PKG, 'lib', 'probes.js')).href)
 const U = await import(pathToFileURL(path.join(PKG, 'lib', 'setup.js')).href)
 const V = await import(pathToFileURL(path.join(PKG, 'lib', 'surface.js')).href)
 const GR = await import(pathToFileURL(path.join(PKG, 'lib', 'graph.js')).href)
+const AR = await import(pathToFileURL(path.join(PKG, 'lib', 'archive.js')).href)
 const A = await import(pathToFileURL(path.join(PKG, 'lib', 'api.js')).href)
 const H = await import(pathToFileURL(path.join(PKG, 'index.js')).href)
 
 const tmp = mkdtempSync(path.join(tmpdir(), 'memoryos-gate-'))
-const clean = () => rmSync(tmp, { recursive: true, force: true })
+// Windows 上 git 仓里的对象文件是只读的，rm 可能 EPERM：**清理失败不该判闸失败**（系统临时目录会自己回收）
+const clean = () => { try { rmSync(tmp, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 }) } catch { /* 见上 */ } }
 
 /** 测试语料：一份手册 + 一份事项（含触发行、条目号互指、一个指向不存在文件的引用、一个没人指的条目） */
 const L = (...a) => a.join('\n')
@@ -58,7 +61,7 @@ function makeCorpus(dir) {
     '# 手册', '', '## 一、事件流水', '', '### AA1 装插件要按七步走', '- **触发**：装插件；上线七步；回滚锚',
     '正文里见 AA2，还指了一个不存在的 `notes/gone.md`。', ''), 'utf8')
   writeFileSync(path.join(dir, 'notes', 'alpha.md'), L(
-    '# Alpha 事项', '', '### AA2 Alpha 的做法', '- **触发**：alpha 怎么写', '这里回指 [[AA1 装插件要按七步走]]。', '',
+    '# Alpha 事项', '', '### AA2 Alpha 的做法', '- **触发**：alpha 怎么写', '这里回指 [AA1 装插件要按七步走](../manual.md)。', '',
     '### AA3 没人指的条目', '（故意不留触发行，也没人引用）', ''), 'utf8')
   return dir
 }
@@ -485,6 +488,9 @@ function makeCorpus(dir) {
   const sub2 = GR.subgraph(g2, r1.starts, { depth: 2 })
   ok(sub1.nodes.length >= 2 && sub2.nodes.length >= sub1.nodes.length, `M13 深度越大子图越大（1 层 ${sub1.nodes.length}／2 层 ${sub2.nodes.length}）`)
   ok(sub2.edges.every((e0) => !!e0.reason), 'M14 每条边都带 reason（"为什么要读它"必须能解释，这是图相对于全文检索的价值）')
+  const mdEdge = g2.edges.find((e0) => e0.type === 'path' && /\(\.\.\/manual\.md\)/.test(String(e0.reason)))
+  ok(!!mdEdge && String(mdEdge.from).startsWith('file:'), 'M14b 标准 Markdown 链接入图且挂在**文件节点**上（索引表天生这么写；"这份新档有没有人引用过"就靠这条边）')
+  ok(!/wikilink/.test(JSON.stringify(g2)), 'M14c 不再有 wikilink 边（那是搬代码时夹带的语法、内核不认，已按拍板删除）')
   const stFresh = GR.status(cfgG, foldG(), { maxAgeHours: 24, maxFiles: 500 })
   ok(stFresh.exists && stFresh.stale === false && stFresh.changed === 0, 'M15 刚建完＝水位新、无未入图改动')
   const outText = GR.render(g2, 'AA1', r1, sub2, stFresh, { depth: 2 })
@@ -559,7 +565,10 @@ function makeCorpus(dir) {
   const ck = await gTool.execute({ action: 'check' })
   ok(/体检：/.test(ck.text) && /AA3/.test(ck.text), 'N9 check 动作把盲区端出来（AA3 那条缺触发行＋没人指）')
   const bad = await gTool.execute({ action: 'nope' })
-  ok(/✗/.test(bad.text) && /status \| build \| light \| check/.test(bad.text), 'N10 未知动作被拒并列出可用动作')
+  ok(/✗/.test(bad.text) && /status \| build \| light \| check \| archive-check/.test(bad.text), 'N10 未知动作被拒并列出可用动作（含 archive-check）')
+  const ac = await gTool.execute({ action: 'archive-check' })
+  ok(/归档闸/.test(ac.text) && /没找到任何 git 仓/.test(ac.text) && /本次未提交的新增/.test(ac.text),
+    'N13 archive-check 端到端可用：记忆根不在 git 仓里时**如实说"按空集处理不硬猜"**，不假装查过')
   disposerN()
   ok(existsSync(path.join(dirN, 'graph.json')), 'N11 图文件真在盘上（不是只在内存里算过）')
 
@@ -571,6 +580,91 @@ function makeCorpus(dir) {
   const noRoot = await g2.execute({ action: 'build', reason: '想建图' })
   ok(/✗/.test(noRoot.text) && /记忆根/.test(noRoot.text), 'N12 没划范围就想建图 ⇒ 拒并指路去资料面（不在空目录上建个空图糊弄人）')
   disposerN2()
+}
+
+// ————————————————————————————————— P 归档闸：提交前检查"本次新增有没有人登记"
+{
+  // —— 纯函数（不碰 git、不碰文件系统，红了立刻知道是哪条判据坏了）
+  ok(AR.unquotePath('"docs/\\345\\275\\222\\346\\241\\243.md"') === 'docs/归档.md',
+    'P1 git 的非 ASCII 路径转义被解开（不解＝"新增 1 份、待查 0"的静默空转）')
+  const stP = AR.parseStatus('?? docs/新档.md\n M a.md\nR  old.md -> new.md\nA  added.md\n')
+  ok(stP.length === 4 && stP[0].code === '??' && stP[0].path === 'docs/新档.md' && stP[2].path === 'new.md',
+    'P2 git status 解析：未跟踪／改动／重命名取新名（改名前的旧名不算"本次新增"）')
+  ok(AR.isNew('??') && AR.isNew('A ') && AR.isNew('R ') && !AR.isNew(' M') && !AR.isNew(' D'),
+    'P3 新增判定只认 ??/A/R（改动与删除不是"新增"）')
+  ok(AR.exemptReason(['> 归档：免索引（临时探针）']) === '免索引（临时探针）' && AR.exemptReason(['# 正常档']) === '',
+    'P4 豁免行只认文件头那句，且理由原文带出来（豁免必须可见）')
+  const role1 = AR.docRoleOf(['> 档位：中枢 ｜ 指针条目=AA1'])
+  ok(role1.role === 'hub' && AR.docRoleOf(['> **档位**: leaf']).role === 'leaf' && AR.docRoleOf(['# 没写']).role === 'leaf',
+    'P5 文件头档位：中枢／叶子白名单，未声明＝叶子（漏了只是少跳一层，不会变坏）')
+  ok(AR.docRoleOf(['> 档位：看不懂的值']).raw === '看不懂的值',
+    'P5b 档位值不认识 ⇒ 回叶子但**把原值带出去**（让体检能报，而不是静默当没写）')
+  ok(AR.danglingRefs(['> 档位：叶子 ｜ 指针条目=AA1'], ['AA1']).length === 0
+    && AR.danglingRefs(['指针条目=WN99'], ['AA1'])[0] === 'WN99',
+    'P6 回指条目号悬空检测（写错号原先完全静默，谁也看不见）')
+  ok(AR.collect([path.join(tmp, 'no-such-repo')]).gitOk === false,
+    'P6b 仓不存在／没 git ⇒ gitOk=false（**fail-open**：闸坏掉不许挡归档）')
+
+  // —— 真 git 仓端到端（建临时仓 → 造未提交新增 → 闸的三种结论）
+  const repoP = path.join(tmp, 'repoP')
+  const gitP = (...a) => execFileSync('git', ['-C', repoP, ...a], { stdio: ['ignore', 'pipe', 'ignore'], encoding: 'utf8' })
+  let gitOk = true
+  try {
+    mkdirSync(repoP, { recursive: true })
+    gitP('init')
+    gitP('config', 'user.email', 'gate@example.invalid')
+    gitP('config', 'user.name', 'gate')
+    writeFileSync(path.join(repoP, 'index.md'), L('> 档位：中枢', '', '# 索引', '', '- 还没有条目', ''), 'utf8')
+    writeFileSync(path.join(repoP, 'base.md'), L('# 基础档', '', '### AA1 已有条目', '- **触发**：已有的东西', ''), 'utf8')
+    gitP('add', '-A')
+    gitP('commit', '-m', 'base')
+  } catch { gitOk = false }
+  if (!gitOk) {
+    ok(true, 'P7–P10 跳过真 git 端到端（本机没 git 或建仓失败）——纯函数与 fail-open 已由 P1–P6b 钉住')
+  } else {
+    const cfgP = { dataDir: path.join(tmp, 'gstateP'), memoryRoots: [repoP], archiveRepos: [repoP], legacyKeyFiles: [], graphStaleHours: 24, graphMaxFiles: 200 }
+    // 每一步用**独立的 dataDir**：闸在没有图时会自己建一次（这正是闸的正常路径），
+    // 也避免"同一秒内改文件"落进图水位的 1 秒防抖窗口（那是给正常编辑留的宽限，不是这次要测的东西）。
+    let seqP = 0
+    const gate = (extra = {}) => {
+      const dir = path.join(tmp, 'gstateP' + (++seqP))
+      return AR.run({ ...cfgP, dataDir: dir }, V.foldSurface(dir), extra)
+    }
+
+    writeFileSync(path.join(repoP, 'orphan.md'), L('# 没人引用的一份', '', '> 档位：叶子 ｜ 指针条目=WN99', '', '正文', ''), 'utf8')
+    const r7 = gate()
+    ok(r7.warns === 2 && /没有任何 \.md 引用它/.test(r7.markdown) && /悬空/.test(r7.markdown),
+      `P7 未登记 + 回指悬空 ⇒ 2 条 warn（实测 ${r7.warns}；闸只说事实，不挡提交）`)
+
+    writeFileSync(path.join(repoP, 'orphan.md'), L('# 没人引用的一份', '', '> 档位：叶子 ｜ 指针条目=AA1', '',
+      '> 归档：免索引（一次性探针）', '', '正文', ''), 'utf8')
+    const r8 = gate()
+    ok(r8.warns === 0 && r8.counts.exempt === 1 && /豁免清单/.test(r8.markdown) && /一次性探针/.test(r8.markdown),
+      'P8 写了豁免 ⇒ 跳过判定**且列进豁免清单**（豁免可见，不静默跳过）')
+
+    writeFileSync(path.join(repoP, 'orphan.md'), L('# 有人引用的一份', '', '> 档位：叶子 ｜ 指针条目=AA1', '', '正文', ''), 'utf8')
+    writeFileSync(path.join(repoP, 'index.md'), L('> 档位：中枢', '', '# 索引', '', '- [有人引用的一份](orphan.md)', ''), 'utf8')
+    const r9 = gate()
+    ok(r9.warns === 0 && r9.counts.checked === 1 && r9.counts.info === 0,
+      'P9 索引里加一行**标准 Markdown 链接** ⇒ 闸不再报"没人引用"（被中枢档登记过＝这件事做完了）')
+
+    writeFileSync(path.join(repoP, 'base.md'), L('# 基础档', '', '### AA1 已有条目', '- **触发**：已有的东西', '',
+      '### AA2 新写的条目', '- **触发**：新的东西', ''), 'utf8')
+    const r10 = gate()
+    ok(r10.counts.info >= 1 && /新条目\*\*没有任何文件引用/.test(r10.markdown),
+      'P10 本轮新增的条目没人回指 ⇒ info（提示在专档首行写"指针条目="回指它）')
+
+    const r11 = gate({ files: [path.join(repoP, 'orphan.md')] })
+    ok(r11.counts.checked === 1 && r11.counts.newFiles === 1, 'P11 file= 调试口：只查指定的一份（不把整仓改动倒进来）')
+
+    // "新条目压根没进图"这条分支：这里用"图只扫 1 份文件"模拟"这份没被扫到"（格式对但不在图里）
+    writeFileSync(path.join(repoP, 'later.md'), L('# 后加的档', '', '### AA3 更晚的新条目', '- **触发**：更晚的事', ''), 'utf8')
+    gitP('add', 'later.md')   // 未跟踪文件的 diff 是空的；新条目判定看的是 working tree ＋ 暂存区
+    const dirP12 = path.join(tmp, 'gstateP' + (++seqP))
+    const r12 = AR.run({ ...cfgP, dataDir: dirP12, graphMaxFiles: 1 }, V.foldSurface(dirP12), {})
+    ok(/没进图/.test(r12.markdown) && r12.counts.warn >= 1,
+      'P12 新条目**压根没进图**（不在扫描范围/被上限截掉）⇒ warn 指路"检查标题格式"（不是静默当已登记）')
+  }
 }
 
 // ————————————————————————————————— K 文档与代码对账（四份文档最容易坏在漂移，让它当场变红）
