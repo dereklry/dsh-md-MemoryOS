@@ -89,7 +89,7 @@ agents.md（入口·指引 LLM 去读哪本手册）
   │      memoryos_status  读状态    ｜ memoryos_switch  切开关（必带 reason）
   │      memoryos_setup   probe 测通 · save-key 代存 · where-key 看在哪 · list
   │      memoryos_surface list · add-root · drop-root · add-exclude · drop-exclude · preview
-│      memoryos_graph   status · build · light（词→子图+reason；**零命中自动扫域内正文**，报"哪份文件哪一行字面出现过"）· check（盲区清单）· archive-check（提交前归档闸）
+│      memoryos_graph   status · build · light（词→子图+reason；**零命中自动扫域内正文**，报"哪份文件哪一行字面出现过"；**过泛时只回一个数**）· check（盲区清单）· archive-check（提交前归档闸）
   │    现在要你自己触发：图不会自己建 ⇒ 先 memoryos_graph(action=build)（或面板「资料面」页的重建按钮）
 │    待搬进来才有的：**按需语义寻路（find＝"只有事没有词"时按次调一次；语义能力的主力形态）**、亮起的旧形态（每回合自动注入，已降级）、建档、候选队列、定时维护
   │    面板看：账本页「谁做的·为什么·什么时候」＋概览页 Key 与「模型可否改开关」

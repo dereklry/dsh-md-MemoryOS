@@ -434,9 +434,9 @@ export function apply(ctx, config) {
       const res = resolveStarts(g, q, { maxStarts: 6 })
       const sub = subgraph(g, res.starts, { depth, maxNodes: Number(body.max_nodes) > 0 ? Number(body.max_nodes) : 45 })
       const st = graphStatus(cfg, folded, { ...opts, maxAgeHours: cfg.graphStaleHours })
-      // 零命中才跑"域内正文兜底"（现扫现查、零账）：只在图里没起点时才付这份读盘成本，
-      // 而且**事实排在形近候选之前**——与内核同序（见 graph.fulltextFallback 的三条纪律）。
-      const ft = res.starts.length ? '' : fulltextFallback(cfg, folded, g, q, { maxBytes: cfg.graphMaxBytes, maxFiles: cfg.graphMaxFiles })
+      // 零命中才跑"域内正文兜底"（现扫现查、零账）；**过泛查询不跑**——它的答案只有一句"问得太泛"，
+      // 扫一遍库再列细节等于把上下文烧在噪声上（用户 2026-10-02 口径：过泛只报一个数）。
+      const ft = (res.starts.length || res.overbroad) ? '' : fulltextFallback(cfg, folded, g, q, { maxBytes: cfg.graphMaxBytes, maxFiles: cfg.graphMaxFiles })
       return {
         ok: true,
         message: renderLight(g, q, res, sub, st, { depth, fulltext: ft }),

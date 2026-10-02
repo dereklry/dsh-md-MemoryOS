@@ -586,6 +586,20 @@ function makeCorpus(dir) {
   ok(/字面出现过/.test(ftLight.text) && /manual\.md/.test(ftLight.text), 'N14 零命中时兜底自动跑：工具层直接报出"哪份文件哪一行字面出现过"')
   const hitLight = await gTool.execute({ action: 'light', query: 'AA1' })
   ok(!/字面出现过|零命中/.test(hitLight.text), 'N15 有起点时不跑兜底（白读一遍盘＝无谓成本，只在零命中付一次）')
+  // 过泛查询端到端（2026-10-02 用户口径）：> MAX_STARTS 起点 ⇒ 只回一个数，且**不跑兜底**
+  const corpusN3 = makeCorpus(path.join(tmp, 'corpusN3'))
+  for (let i = 1; i <= 10; i++) writeFileSync(path.join(corpusN3, `过泛夹具${i}.md`), L(`# 过泛夹具${i}`, '', '正文一点内容。'), 'utf8')
+  const regsN3 = []
+  const subN3 = { get: () => undefined, logger: { info() {}, warn() {} }, tools: { register: (t) => { regsN3.push(t); return () => {} } } }
+  const dN3 = H.apply({ logger: subN3.logger, tools: subN3.tools, get: subN3.get, inject: (_d, cb) => cb(subN3) },
+    { dataDir: path.join(tmp, 'hgn3'), memoryRoot: corpusN3, graphStaleHours: 24 })
+  const gTool3 = regsN3.find((t) => t.name === 'memoryos_graph')
+  await gTool3.execute({ action: 'build' })
+  const obLight = await gTool3.execute({ action: 'light', query: '过泛夹具' })
+  ok(/过泛/.test(obLight.text) && /个起点/.test(obLight.text) && obLight.text.split('\n').length <= 3
+    && !/字面出现过|亮起子图|线索/.test(obLight.text),
+    'N16 ★ 过泛查询端到端：工具只回一个数（不展开图、也不跑兜底＝省掉一次全库读盘）')
+  dN3()
   disposerN()
   ok(existsSync(path.join(dirN, 'graph.json')), 'N11 图文件真在盘上（不是只在内存里算过）')
 
@@ -715,12 +729,23 @@ function makeCorpus(dir) {
   const fbig = ft('BigOnlyWord')
   ok(/不在扫描面/.test(fbig) && /big\.md/.test(fbig), 'Q7 只在超门文件里出现的词 ⇒ 零命中但仍**点名**那份被挡的档（旧口径这里静默消失）')
   const ff = ft('结构词')
-  ok(/命中过多/.test(ff) && /疑似结构词/.test(ff) && !/字面出现过/.test(ff), 'Q8 泛词闸：超 40 行只报文件级计数并明说命中过多（不静默中截）')
+  ok(/命中过多/.test(ff) && /疑似结构词/.test(ff) && !/字面出现过/.test(ff) && !/命中最多/.test(ff),
+    'Q8 泛词闸：超 40 行只报一个数（连"命中最多的是哪几个文件"也隐去——2026-10-02 用户口径）')
   ok(/不代表这就是答案/.test(f1), 'Q9 免责句在场：只报"字面出现过" ≠ 这就是答案（同词不同题是常态）')
   const rq = GR.resolveStarts(gQ, 'Qwen3-8B')
   const rtxt = GR.render(gQ, 'Qwen3-8B', rq, GR.subgraph(gQ, rq.starts, {}), GR.status(cfgQ, foldQ(), { maxAgeHours: 24, maxFiles: 200 }), { fulltext: f1 })
   ok(rq.starts.length === 0 && rtxt.indexOf('字面出现过') > 0 && rtxt.indexOf('字面出现过') < rtxt.indexOf('线索'),
     'Q10 零命中页里**事实排在线索之前**（"在哪儿出现过"可验证，"像哪个"是猜的）')
+  // Q11 过泛查询闸（2026-10-02 与内核同口径）：命中 > MAX_STARTS ⇒ 只回一个数、细节全隐
+  for (let i = 1; i <= 10; i++) writeFileSync(path.join(qdir, 'notes', `过泛夹具${i}.md`), L(`# 过泛夹具${i}`, '', '正文一点内容。', ''), 'utf8')
+  const gQ2 = GR.build(cfgQ, foldQ(), { maxFiles: 200, maxBytes: 4000 }).graph
+  const rob = GR.resolveStarts(gQ2, '过泛夹具')
+  ok(rob.starts.length === 0 && !!rob.overbroad && rob.overbroad.n > GR.MAX_STARTS,
+    `Q11 ★ 起点数闸：任一档命中 > MAX_STARTS(${GR.MAX_STARTS}) ⇒ 判过泛查询、不当起点、如实记数（实测 ${rob.overbroad && rob.overbroad.n} 个）`)
+  const rtxt2 = GR.render(gQ2, '过泛夹具', rob, GR.subgraph(gQ2, [], {}), GR.status(cfgQ, foldQ(), { maxAgeHours: 24, maxFiles: 200 }), {})
+  ok(new RegExp(`${rob.overbroad.n} 个起点`).test(rtxt2) && rtxt2.split('\n').length <= 3,
+    'Q11b ★ 过泛查询只回一个数（≤3 行）：不展开图、不给候选、不接兜底段')
+  ok(!/亮起子图|字面出现过|线索/.test(rtxt2), 'Q11c ★ 过泛时其余细节全部隐去（用户口径：只报一个数）')
 }
 
 // ————————————————————————————————— K 文档与代码对账（四份文档最容易坏在漂移，让它当场变红）
@@ -834,6 +859,11 @@ function makeCorpus(dir) {
   ok(/按需/.test(docs['docs/AGENT-GUIDE.md']) && /不是每回合主力/.test(docs['docs/AGENT-GUIDE.md']), 'K9e AGENT-GUIDE 告诉模型：语义能力按需调用、不是每回合主力')
   ok(/按需可调用的工具/.test(docs['README.md']), 'K9f README 状态行写明"语义能力保留为按需可调用的工具"')
   ok(/未实现 5/.test(docs['docs/WORKFLOW.md']), 'K9g WORKFLOW 概览计数跟上（新增 find ⇒ 未实现 5）')
+  // K10 过泛处置口径（2026-10-02 用户定：只报一个数、其他细节直接隐去）——四处同口径
+  ok(/MAX_STARTS/.test(docs['docs/DESIGN.md']) && /只回一个数/.test(docs['docs/DESIGN.md']), 'K10a DESIGN 写过泛闸（起点闸 8 / 正文闸 40）与"只回一个数"')
+  ok(/过泛/.test(docs['docs/AGENT-GUIDE.md']) && /别追问/.test(docs['docs/AGENT-GUIDE.md']), 'K10b AGENT-GUIDE 告诉模型：过泛时照实转述、别替它展开')
+  ok(/过泛/.test(docs['docs/JUDGMENTS.md']) && /半张图/.test(docs['docs/JUDGMENTS.md']), 'K10c JUDGMENTS 用实测数字交代了"过泛为什么不给细节"')
+  ok(/过泛/.test(docs['README.md']) && /过泛/.test(docs['docs/WORKFLOW.md']), 'K10d README 与 WORKFLOW 同步过泛口径')
 
   // K7 契约与前后端一致：patch id、槽位、前缀三处不得各自漂移
   const patch = readFileSync(path.join(PKG, 'cordis.patch.yml'), 'utf8')
