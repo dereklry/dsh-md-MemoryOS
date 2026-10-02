@@ -77,6 +77,11 @@ function makeCorpus(dir) {
   ok(F.FEATURES.filter((f) => f.controller === 'llm').every((f) => f.impl === 'todo' || f.steps.length > 0), 'A5 凡"由模型执行"的活功能都必须有 steps（否则它该是一键开关）')
   ok(F.FEATURES.every((f) => f.cost && f.what && f.label), 'A6 每项都有显示名／做什么／成本三件套')
   ok(F.FEATURES.every((f) => F.GROUPS.includes(f.group)), 'A7 每项都归到已知组')
+  // A8 ★ radar 降级为默认不开启（2026-10-02 用户拍板）——默认值 + 说明 + 文档三处钉住
+  const rd = F.featureOf('radar')
+  ok(rd && rd.default === false, 'A8 ★ radar 出厂默认＝false（降级为默认不开启：装上也零花费，要试须显式 opt-in）')
+  ok(rd.impl === 'todo' && /降级/.test(rd.what) && /JUDGMENTS/.test(rd.what), 'A8b radar 仍是 todo（降级≠已实现），且登记说明自述"已降级"并指向 JUDGMENTS（面板/工具读到的话不误导）')
+  ok(/默认关|零花费/.test(rd.cost), 'A8c radar 的成本行写明"默认关＝零花费"（用户看成本那一栏就懂）')
 }
 // ————————————————————————————————— B 探针双向同源
 {
@@ -752,6 +757,24 @@ function makeCorpus(dir) {
     'K5c 三种分叉症状都在文档里——不报错的故障必须写下来才有人去查')
   ok(['on', 'off', 'waiting', 'degraded', 'unavailable', 'planned'].every((s) => new RegExp(`\`?${s}\`?`).test(docs['docs/DESIGN.md'])),
     'K6 六档状态在设计文档里都有定义（新增档必须写进来，否则面板中文无处可查）')
+
+  // K8 ★ radar 降级（2026-10-02）：四处（JUDGMENTS 理由 / WORKFLOW 回路 / AGENT-GUIDE 模型纪律 / patch 默认值）必须同口径
+  const jm = docs['docs/JUDGMENTS.md']
+  ok(/## 5\.5[^\n]*radar[^\n]*降级/.test(jm), 'K8a JUDGMENTS 有专节「为什么把 radar 降级为默认不开启」')
+  for (const [pat, msg] of [
+    [/固定计费点/, 'K8a① 降级依据一＝它是每回合固定计费点'],
+    [/暂停维护/, 'K8a② 降级依据二＝它的输入（判路问句文档）已暂停维护'],
+    [/零命中/, 'K8a③ 降级依据三＝零命中→正文兜底已覆盖大多数场景'],
+    [/字面完全不同/, 'K8a④ 写明它剩下的唯一价值＝"说法与用词字面完全不同"'],
+    [/opt-in|显式开/, 'K8a⑤ 写明开发者可显式 opt-in（降级≠删除）'],
+    [/重标定/, 'K8a⑥ 优化清单第一条＝阈值必须重标定'],
+    [/为什么不为它新增/, 'K8a⑦ 交代"为什么不为它加一个已弃用状态档"（防日后有人补一个多余档）'],
+  ]) ok(pat.test(jm), msg)
+  ok(/默认不开启|默认关/.test(docs['docs/WORKFLOW.md']) && /JUDGMENTS/.test(docs['docs/WORKFLOW.md']), 'K8b WORKFLOW 回路 ② 写明 radar 默认关并指向理由')
+  ok(/默认不开启|默认关/.test(docs['docs/AGENT-GUIDE.md']) && /别主动建议|别向用户/.test(docs['docs/AGENT-GUIDE.md']), 'K8c AGENT-GUIDE 明写"别主动劝用户开 radar"（模型侧纪律）')
+  ok(/radar/.test(docs['docs/DESIGN.md']) && /5\.5/.test(docs['docs/DESIGN.md']) && /默认关/.test(docs['docs/DESIGN.md']), 'K8d DESIGN 的 radar 行与术语注都指向 §5.5')
+  ok(/radar:\s*false/.test(readFileSync(path.join(PKG, 'cordis.patch.yml'), 'utf8')), 'K8e profile patch 的出厂默认同为 false（登记表与 patch 不能一个开一个关）')
+  ok(/radar/.test(docs['README.md']) && /JUDGMENTS/.test(docs['README.md']), 'K8f README 状态行/使用行同步降级并给理由入口')
 
   // K7 契约与前后端一致：patch id、槽位、前缀三处不得各自漂移
   const patch = readFileSync(path.join(PKG, 'cordis.patch.yml'), 'utf8')

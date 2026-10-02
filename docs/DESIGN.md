@@ -18,7 +18,7 @@
 | `switch-ledger` | user | **live** | append-only 开关账本 |
 | `jev-engine` | llm | **live** | 配置型样板：Key 到位 → 测通 → 才置生效 |
 | `surface-admin` | user | **live** | 资料面管理：看/改管理范围（只数文件名，不读内容） |
-| `radar` | both | todo | 资料亮起（每回合匹配资料并亮给模型） |
+| `radar` | both | todo | 资料亮起（每回合匹配资料并亮给模型）——**2026-10-02 降级为默认关**（出厂 `default:false`，只作开发者 opt-in；理由与优化清单＝`JUDGMENTS.md` §5.5） |
 | `graph-search` | both | **live** | 指针图：建图／`light` 索引／`check` 体检（纯本地零账，秒级） |
 | `scaffold` | user | todo | 首次建档（四层骨架 + 资料表初稿） |
 | `mining` | llm | todo | 候选生成（查空的词→别名、反复读的→资料行） |
@@ -27,6 +27,7 @@
 `impl: 'todo'` 的功能**在面板上灰显且不给任何按钮**（`mayWrite()` 直接拒绝）：面板不许骗人。搬入一个器官＝把 `impl` 改成 `live`，同时它的开关与状态自动生效，无需改面板。
 
 > **一个术语先约定**（`WORKFLOW.md` 的回路图 ②⑤⑥ 反复用到）：**Jev 判路问句文档** ＝ 给判定模型看的候选表，每行 `id ＋ criteria ＋ hint`（`criteria` 用"用户会说的话"写，含口语别名；`hint` 一句"什么情形做什么、去哪看正文"，禁绝对行号）。判定模型＝**Jev（TypeSafe System One 一类快速结构化判定）**，设计上可插拔为 `jev`｜宿主模型｜本地词法。它是回路 ② 的**唯一输入**，所以 ⑤ 归档要同步它、⑥ 体检要盯它与资料的分叉。**本仓库尚未实现这个器官**（`radar: todo`），别在文档或代码注释里假装它已经在工作。
+> **⚠ 2026-10-02 起再叠一条：`radar` 已降级为"默认不开启"**（出厂默认 `false`，只作**开发者显式 opt-in**）——它不是"欠着没做的默认器官"，而是"**保留但不推荐默认开**"的路线。为什么（每回合固定计费点／输入要人持续维护／词法检索＋零命中正文兜底已覆盖大多数场景）、什么时候才值得开、开发者怎么开与怎么优化 ⇒ **`JUDGMENTS.md` §5.5**。
 
 ---
 
@@ -300,7 +301,7 @@ test/stub-dsh-tools.mjs  宿主 dsh-tools 的恒等替身（让闸不依赖 DSH 
 | `llmCanSwitch` | — | 总闸：模型能否改开关（默认 true） |
 | `modelCanSaveKey` | — | 模型能否代存 Key（默认 true） |
 | `allowKeyInRepo` | — | 允许把 Key 写进 git 工作树（默认 **false**，见 §8） |
-| `defaults` | — | 各功能出厂默认（`{ "radar": true, … }`），低于账本 |
+| `defaults` | — | 各功能出厂默认（`{ "radar": false, … }`——`radar` 已降级为默认关，见 `JUDGMENTS.md` §5.5），低于账本 |
 | `transport` | — | 测试注入点：替换测通的 HTTP 传输（闸因此全程不联网） |
 
 ---
