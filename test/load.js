@@ -755,6 +755,22 @@ function makeCorpus(dir) {
   const rftxt = GR.render(gQ2, 'flood', rf, GR.subgraph(gQ2, rf.starts, {}), GR.status(cfgQ, foldQ(), { maxAgeHours: 24, maxFiles: 200 }), {})
   ok(/〔文件〕/.test(rftxt) && rftxt.split('\n').length <= 5 && !/亮起子图/.test(rftxt),
     'Q12 ★ 文件起点默认＝一行落点（不展开邻域；要地图＝expand:true）')
+  // Q13 专档行（2026-10-02 用户举"本地引擎那次测试"为例）：条目后紧跟"回指本条目、且文件名由载体文件派生"的那份专档，
+  // 摘要＝回指行原文；其余回指文件只报计数（不摊开索引）
+  const qdir2 = path.join(tmp, 'qcorpus2')
+  mkdirSync(qdir2, { recursive: true })
+  writeFileSync(path.join(qdir2, 'notes.md'), L('# 主档', '', '### AA7 引擎测试结论', '- **触发**：引擎怎么测', '结论：弃用，引擎保留。', '', '指针：见 `notes-engine.md` 全文。', ''), 'utf8')
+  writeFileSync(path.join(qdir2, 'notes-engine.md'), L('# 引擎测试全记录', '', '> 指针条目=AA7｜本档是它的证据全文（结论条目在主档）。', ''), 'utf8')
+  writeFileSync(path.join(qdir2, 'OTHER.md'), L('# 别人的索引', '', '登记：见 AA7（索引行，不是专档）。', ''), 'utf8')
+  const cfgQ3 = { dataDir: path.join(tmp, 'qstate3'), memoryRoots: [qdir2], legacyKeyFiles: [], graphStaleHours: 24, graphMaxFiles: 200, graphMaxBytes: 4_000_000 }
+  const gQ3 = GR.build(cfgQ3, V.foldSurface(cfgQ3.dataDir), { maxFiles: 200, maxBytes: 4_000_000 }).graph
+  const r3 = GR.resolveStarts(gQ3, 'AA7')
+  const t3 = GR.render(gQ3, 'AA7', r3, GR.subgraph(gQ3, r3.starts, {}), GR.status(cfgQ3, V.foldSurface(cfgQ3.dataDir), { maxAgeHours: 24, maxFiles: 200 }), {})
+  ok(/〔条目体·AA7〕/.test(t3) && /notes-engine\.md` 〔专档·回指 AA7〕/.test(t3),
+    'Q13 ★ 条目行后紧跟**专档行**（回指本条目＋文件名由载体文件派生 ⇒ notes-engine.md）')
+  ok(/证据全文/.test(t3), 'Q13b 专档行摘要＝**回指行原文**（零读盘，与内核同口径）')
+  ok(!/OTHER\.md` 〔专档/.test(t3) && /另有 \*\*1\*\* 个文件回指/.test(t3),
+    'Q13c 非专档的回指文件只报计数（不把索引摊开）')
 }
 
 // ————————————————————————————————— K 文档与代码对账（四份文档最容易坏在漂移，让它当场变红）
@@ -877,6 +893,8 @@ function makeCorpus(dir) {
   ok(/LIGHT_MAX_POINTS/.test(docs['docs/DESIGN.md']) && /expand:true/.test(docs['docs/DESIGN.md']), 'K11a DESIGN 写落点默认＋expand 才给地图＋上限')
   ok(/落点清单/.test(docs['docs/AGENT-GUIDE.md']) && /expand:true/.test(docs['docs/AGENT-GUIDE.md']), 'K11b AGENT-GUIDE 教模型：默认只有落点，要地图才 expand')
   ok(/落点/.test(docs['README.md']) && /自带索引/.test(docs['docs/JUDGMENTS.md']), 'K11c README 与 JUDGMENTS 同步（判决＝工具不重做目录）')
+  ok(/专档/.test(docs['docs/DESIGN.md']) && /专档/.test(docs['docs/AGENT-GUIDE.md']) && /回指行原文/.test(docs['docs/JUDGMENTS.md']),
+    'K11d 专档行（第二行）三处同口径：DESIGN 判据＋AGENT-GUIDE 用法＋JUDGMENTS 理由')
 
   // K7 契约与前后端一致：patch id、槽位、前缀三处不得各自漂移
   const patch = readFileSync(path.join(PKG, 'cordis.patch.yml'), 'utf8')
