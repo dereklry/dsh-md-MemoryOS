@@ -28,7 +28,7 @@
 | `memoryos_setup` | 配置型功能的准备动作 | `action:'probe'|'save-key'|'where-key'|'list'`、`reason`（必填）、`feature?`、`key?`、`path?`、`allow_in_repo?` |
 | `memoryos_graph` | 建图、按词查**落点**（哪条目/哪文件/哪行）、体检、**提交前归档闸** | `action:'status'|'build'|'light'|'check'|'archive-check'`、`query?`、`expand?`、`depth?`、`max_nodes?`、`reason?`、`file?`、`no_refresh?` |
 | `memoryos_surface` | 看或改**资料面**（哪些目录归 OS 管、排掉哪些子目录与文件） | `action:'list'|'add-root'|'drop-root'|'add-exclude'|'drop-exclude'|'preview'`、`path?`、`pattern?`、`reason`（写操作必填） |
-| `memoryos_elements` | **元素库**（元素-时间线内核，本地 SQLite）：把一段话抽成"元素＋**带时间戳事件**"入库、把一份 md 按元素导入、按元素拉时间线／快照、标失效、导出 md 镜像 | `action:'status'|'ingest'|'import'|'timeline'|'snapshot'|'all'|'expire'|'export'`、`text?`、`element?`、`elements?`、`source?`、`since?`、`limit?`、`fragment?`、`path?`、`category?` |
+| `memoryos_elements` | **元素库**（元素-时间线内核，本地 SQLite）：入库（一段话／一份 md）· **多点快照**（`save` 拍一份、`context` 取最新＝当前逻辑）· 时间线／快照／元素清单 · 标失效 · 导出 md 镜像 | `action:'status'|'ingest'|'import'|'save'|'context'|'timeline'|'snapshot'|'all'|'expire'|'export'`、`text?`、`element?`、`elements?`、`source?`、`since?`、`limit?`、`fragment?`、`path?`、`category?`、`note?`、`as_of?`、`status?` |
 
 读 `memoryos_status` 的典型输出（每行一功能）：
 
@@ -142,7 +142,8 @@
 ```
 MemoryOS：功能状态一律以 memoryos_status 为准（现算，别引用记忆里的旧状态）。资料面（管到哪些目录／排掉哪些文件）用 memoryos_surface：先 list 再看，加排除前必须 preview；profile 基线删不掉、类型固定 .md 不许承诺扩展。
 指针图用 memoryos_graph：改了资料面或新写归档 md 就 build；light 默认只给落点（哪条目/哪文件/哪行，不是内容），命中级别（精准／变体）照原话转述，要地图才加 `expand:true`；收尾跑一次 check 报盲区；**准备 git commit 前跑一次 archive-check**（只看本次新增：新档没人引用／回指条目号悬空 ⇒ warn，只报事实不改文件，豁免写法 `> 归档：免索引（理由）`）。
-元素库用 memoryos_elements：聊到/写下的元素与**带时间戳事件**用 `ingest` 固化（文本里要有 6 位代码，或显式给 `elements`——未知新概念会作为**待确认候选**返回，**别自己建**）；问"某元素过去发生过什么"用 `timeline`／`snapshot`；**没有 API Key 时走规则层**，照实说"抽取＝规则层"，别讲成"AI 抽取的"。它管**结构化事实**，与"这件事该读哪份 md"（走 memoryos_graph）不是一回事。
+元素库用 memoryos_elements：聊到/写下的元素与**带时间戳事件**用 `ingest` 固化（文本里要有 6 位代码，或显式给 `elements`——未知新概念会作为**待确认候选**返回，**别自己建**）；一份 md 想整档入库用 `import`（文件名去 `.md` 常是元素名；**幂等、只读原件**）；问"某元素过去发生过什么"用 `timeline`／`snapshot`；**没有 API Key 时走规则层**，照实说"抽取＝规则层"，别讲成"AI 抽取的"。它管**结构化事实**，与"这件事该读哪份 md"（走 memoryos_graph）不是一回事。
+**"当前是怎么想的"用 `save` + `context`**（多点快照）：判断/逻辑定了型、或一轮工作收尾时，**主动 `save` 拍一份**（它会把快照落 `exports/` **并在时间线上写一个点**）；用户问"我现在是什么逻辑/当时怎么定的"就 `context`（取最新快照＋自快照以来新增）。**`context` 取不到快照不会现场生成**——如实说"还没拍过"并问要不要拍，别假装有。
 **别把元素库说成"AI 在理解你的话"**：本包当前**没有接任何 LLM 通道**（`ingest` 返回里的 `llm:false` 就是证据），抽取走的是**规则层**（时间解析 ＋ 元素线索）；将来若接了（`DEEPSEEK_API_KEY` 那条），也只有在 `llm:true` 时才能那么说。任何"用了模型／API"的说法都要与返回值一致——这是本包"不吹牛"的最低要求。
 文件头契约：专档开头写 `> 档位：叶子 ｜ 指针条目=AAx`（叶子默认；中枢＝指路文件）；条目写成 `### AA17 <情形>：<动作>` ＋ `- **触发**：` 一行（用户会怎么说）。
 只有登记为「由模型执行/双方可切」且未被用户接管的项你能切，且必须写中文 reason。

@@ -627,7 +627,36 @@ export function apply(ctx, config) {
       if (d.ok === false) return { ok: false, message: d.note || '导入失败' }
       return { ok: true, message: `已按元素「${d.element}」导入：解析 ${d.parsed ?? 0} 行 → 新增事件 ${d.new ?? 0}（重复行自动去重；元素不存在则新建，category=${args.category || 'generic'}）\n注意：只**读**源 md，原件没动。` }
     }
-    return { ok: false, message: `未知动作：${action}（可用 status | ingest | import | timeline | snapshot | all | expire | export）` }
+    if (action === 'save') {
+      const el = String(args.element || '').trim()
+      if (!el) return { ok: false, message: 'save 要给 element（拍哪个元素的快照）' }
+      const argv = ['snapshot', el, '--save']
+      if (args.note) argv.push('--note', String(args.note))
+      const r = await callKernel(argv, 60000)
+      if (!r.ok) return { ok: false, message: r.message }
+      const d = r.data || {}
+      if (d.ok === false) return { ok: false, message: d.note || '拍快照失败' }
+      const pt = d.timeline_point || {}
+      return { ok: true, message: `已拍快照：${d.file}（${d.bytes} 字节，active ${d.active}／待定 ${d.pending}）\n时间线上写了${pt.inserted ? '' : '（内容重复，未重复写）'}一个点：${pt.ts}｜${pt.content}\n快照索引已重建：${d.index}` }
+    }
+    if (action === 'context') {
+      const el = String(args.element || '').trim()
+      if (!el) return { ok: false, message: 'context 要给 element（取哪个元素的"当前逻辑"）' }
+      const r = await callKernel(['context', el], 60000)
+      if (!r.ok) return { ok: false, message: r.message }
+      const d = r.data || {}
+      if (!d.found) return { ok: true, message: `元素库里没有「${el}」。先用 ingest／import 把它建出来。` }
+      const ns = d.new_since_snapshot || {}
+      const tail = ns.count
+        ? `\n\n自快照以来新增 ${ns.count} 条：\n${(ns.events || []).map((e) => `- ${e.ts}｜${e.content}`).join('\n')}`
+        : `\n\n自快照（${ns.since || '—'}）以来没有新增事件。`
+      if (!d.snapshot) {
+        const rec = (d.recent_events || []).map((e) => `- ${e.ts || '（无时间·待定区）'}｜${e.content}`).join('\n')
+        return { ok: true, message: `${d.note || '还没有快照'}\n最近事件：\n${rec || '（还没有事件）'}` }
+      }
+      return { ok: true, message: `最新快照＝当前运行逻辑（${d.snapshot.file}，拍于 ${d.snapshot.stamp}）：\n\n${d.content}${d.truncated ? `\n（快照较长已截断，全文：${d.snapshot.path}）` : ''}${tail}` }
+    }
+    return { ok: false, message: `未知动作：${action}（可用 status | ingest | import | save | context | timeline | snapshot | all | expire | export）` }
   }
 
   reg(defineTool({
@@ -637,13 +666,15 @@ export function apply(ctx, config) {
       + '动作：`status`（库规模与落点）｜`ingest`（要 text；把一段话抽成元素+事件入库）｜`import`（要 element+path；把一份 **Markdown 时间线档**按元素导入）｜`timeline`（要 element；某元素按时间的多股绳）｜`snapshot`（要 element；最近状态）｜`all`（库里都有谁）｜`expire`（element+fragment；按内容片段标失效，不删历史）｜`export`（导出 md 镜像）。'
       + '**`import` 认的档长这样**：`- YYYY-MM-DD 内容 [已失效] → 引用`（`→` 后面进事件的 `ref`，`[已失效]` 标 expired）；**幂等**——重复导入自动去重；元素不存在则新建（`category` 默认 `generic`，别指望它自动判成"股票"）。上游 `import-timelines` 的惯例是**文件名去掉 `.md` 就当元素名**，本工具要你显式给 `element`。'
       + '**"md 与库两处都有"的正确口径（别搞成双写）**：**md 是人的输入**、**库是查询/决策端**——`import` 是单向幂等搬运（**读源档、不改原件**），`export` 出来的 md 是**派生镜像**（别手改：要改就改库，或改源 md 后重新导入）。两边同时手改＝双写，迟早对不上、且没有仲裁者。'
-      + '**抽取有元素线索才落库**：文本里带 6 位代码，或用 `elements` 显式给已知元素（如 "沪深300ETF,510300"）——这是上游内核的保守模式，宁可少建也不制造碎片元素；真正的未知新元素会作为**待确认候选**返回（`elements_deferred`），你确认后才建。'
+      + '**`save` ＝ 多点快照的生产者**：把该元素当前状态拍成 `<数据根>/exports/<元素>_snap_<时间戳>.md`，**并往时间线写一个点**（`source=snapshot`、`ref=` 快照档），同时重建 `exports/INDEX.md`。**`context` ＝取最新快照（＝当前运行逻辑）**，并附"自快照以来新增了什么"。这就是"**每归档/commit 一次流一个快照，提及时取最后一次**"那条用法（时间线两种读法：逐条事件 vs 多点快照）。'
+      + '`context` **取不到快照时不会现场生成**（只读动作不写盘）——它只如实说"还没拍过"并给出最近事件，要不要拍由你调 `save` 决定。'
+      + '**抽取有元素线索才落库**：文本里带 6 位代码，或用 `elements` 显式给已知元素——这是上游内核的保守模式，宁可少建也不制造碎片元素；真正的未知新元素会作为**待确认候选**返回（`elements_deferred`），你确认后才建。'
       + '**无 API Key 也能用**：规则层解析时间（ISO/中日韩日期/今天昨天/相对天数）与元素线索；有 Key 时才走 LLM 精抽，失败自动降级（结果里会写"抽取＝规则层"）。'
       + '**事件铁律**：没有时间属性的事件落 `ts=""` 进**待定区**（status=pending），不伪造时间；历史只追加、失效用标记不删除。'
       + '库落 `<数据根>/elements/memory.db`（与指针图分开两个数据根）；python 找不到时**只这一个工具不可用**，面板与词法检索照常。'
       + '它管的是**结构化事实**（谁在什么时候做了什么）；"这件事该读哪份 md"仍走 memoryos_graph 的词法落点——两者不是一回事，别互相替代。',
     parameters: {
-      action: { type: 'string', required: true, description: 'status | ingest | import | timeline | snapshot | all | expire | export' },
+      action: { type: 'string', required: true, description: 'status | ingest | import | save | context | timeline | snapshot | all | expire | export' },
       text: { type: 'string', description: '仅 ingest：要固化进元素库的那段话' },
       source: { type: 'string', description: '仅 ingest：来源标注（如对话/文件名，便于回溯）' },
       elements: { type: 'string', description: '仅 ingest：已知元素，逗号分隔（给了它就走保守模式：不新建元素，未知名挂到主元素）' },
@@ -653,6 +684,7 @@ export function apply(ctx, config) {
       status: { type: 'string', description: '仅 timeline：active（默认）| expired | pending | all＝不过滤' },
       limit: { type: 'number', description: '仅 timeline：最多几条（默认 200）' },
       fragment: { type: 'string', description: '仅 expire：要标失效的内容片段' },
+      note: { type: 'string', description: '仅 save：写进快照的备注（如「第一版逻辑」）' },
       path: { type: 'string', description: 'export：导出文件路径（默认 <数据根>/elements/timeline-export.md）｜import：要导入的 .md 路径' },
       category: { type: 'string', description: '仅 import：元素不存在时新建的类别（默认 generic；上游原为写死 stock）' },
     },

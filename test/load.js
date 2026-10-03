@@ -173,7 +173,15 @@ function makeCorpus(dir) {
   const fakeKernel = (argv) => {
     const a = argv[0]
     if (a === 'status') return Promise.resolve({ ok: true, data: { ok: true, db: 'X/memory.db', bytes: 4096, counts: { elements: 2, events: 3, links: 1, decisions: 0 }, pending: 1, data_root: 'X' } })
-    if (a === 'snapshot') return Promise.resolve({ ok: true, data: { element_id: 1, latest: { ts: '2026-10-01', content: '买入 510300', source: 'S', status: 'active' }, active_count: 3, element: '510300', category: 'generic', aliases: [], tags: '[]', links: [] } })
+    if (a === 'snapshot') {
+      if (argv.includes('--save')) {
+        return Promise.resolve({ ok: true, data: { ok: true, element: '510300', path: 'X/exports/510300_snap_20261003-1805.md', file: '510300_snap_20261003-1805.md', stamp: '20261003-1805', bytes: 291, active: 1, pending: 0, timeline_point: { event_id: 2, inserted: true, ts: '2026-10-03', content: '快照 20261003-1805：active 1 条／待定 0 条' }, index: 'X/exports/INDEX.md' } })
+      }
+      return Promise.resolve({ ok: true, data: { element_id: 1, latest: { ts: '2026-10-01', content: '买入 510300', source: 'S', status: 'active' }, active_count: 3, element: '510300', category: 'generic', aliases: [], tags: '[]', links: [] } })
+    }
+    if (a === 'context') {
+      return Promise.resolve({ ok: true, data: { found: true, element: '510300', snapshot: { file: '510300_snap_20261003-1805.md', path: 'X/exports/510300_snap_20261003-1805.md', stamp: '20261003-1805', mtime: '2026-10-03 18:05', bytes: 291 }, content: '# 510300 快照（2026-10-03 18:05）\n\n- 类别：generic｜跨度：2026-10-01', truncated: false, new_since_snapshot: { since: '2026-10-03', count: 1, events: [{ ts: '2026-10-04', content: '又加了一笔', source: 'S' }] } } })
+    }
     if (a === 'timeline') return Promise.resolve({ ok: true, data: { element: '510300', id: 1, category: 'generic', aliases: [], found: true, events: [{ ts: '2026-10-01', content: '买入 510300', source: 'S', status: 'active' }], links: [] } })
     if (a === 'ingest') return Promise.resolve({ ok: true, data: { elements_new: 1, events_new: 1, links_new: 0, llm: false, elements_deferred: ['某新概念'] } })
     if (a === 'all') return Promise.resolve({ ok: true, data: [{ element: '510300', id: 1, events: [{ ts: '2026-10-01' }] }] })
@@ -320,6 +328,14 @@ function makeCorpus(dir) {
     'E32 元素库 import 渲染出"解析/新增"并声明只读源档（不改原件）')
   const elImpBad = await elTool.execute({ action: 'import', element: '缺路径' })
   ok(/要同时给/.test(elImpBad.text), 'E33 import 缺参数给人话')
+  const elSave = await elTool.execute({ action: 'save', element: '510300', note: '第一版逻辑' })
+  ok(/已拍快照/.test(elSave.text) && /510300_snap_20261003-1805\.md/.test(elSave.text) && /时间线上写了/.test(elSave.text) && /索引已重建/.test(elSave.text),
+    'E34 元素库 save 渲染出快照档名/时间线点/索引重建（多点快照的生产者）')
+  const elCtx = await elTool.execute({ action: 'context', element: '510300' })
+  ok(/最新快照＝当前运行逻辑/.test(elCtx.text) && /自快照以来新增 1 条/.test(elCtx.text) && /510300 快照/.test(elCtx.text),
+    'E35 元素库 context 取最新快照并附"自快照以来新增"（提及时＝当前运行逻辑）')
+  const elSaveBad = await elTool.execute({ action: 'save' })
+  ok(/要给 element/.test(elSaveBad.text), 'E36 save 缺 element 给人话')
 }
 // ————————————————————————————————— G 面板装载契约与静态禁手
 {

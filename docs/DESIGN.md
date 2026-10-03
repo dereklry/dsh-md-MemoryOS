@@ -253,7 +253,7 @@ python/tests/test_kernel_smoke.py  Python 组闸（内核冒烟 6 条：建库/i
 
 **与 md 的双向（"两处都有"是设计，不是同步 bug）**：`import` 把一份 **Markdown 时间线档**按元素导入——认 `- YYYY-MM-DD 内容 [已失效] → 引用` 这类行（`→` 后面进事件的 `ref`），`element` 由调用方给（上游 `import-timelines` 的惯例＝**文件名去掉 `.md` 就是元素名**），**幂等**去重，元素不存在则新建（`category` 默认 `generic`；上游此处写死 `stock`，本包改成可传）；`export` 反向导出 md 镜像（时间线＋元素树与归宿＋产出物索引＋语义关联）。**事实源归属**：md 是人的输入、库是查询/决策端；`import` **只读源档、不改原件**，`export` 产物是**派生镜像**。理由与"两边同时手改＝双写"的判据＝`JUDGMENTS.md` §5.9.6。
 
-**时间线的两种读法**：① **逐条事件**（`- YYYY-MM-DD …`，`timeline` 默认只给 active，`--status all` 给全部）；② **多点快照**（"每次 commit 流一个快照、提及时取最后一次"）——历史视角由 `timeline as_of=<日期>` 支撑（内核 `events_of(as_of=…)`：只看该日及之前、且不计入时间未定的 pending），完整快照落盘／INDEX／取最新那套见 `JUDGMENTS.md` §5.9.7（**本包尚未搬入**）。
+**时间线的两种读法**：① **逐条事件**（`- YYYY-MM-DD …`，`timeline` 默认只给 active，`--status all` 给全部）；② **多点快照**（"每次 commit/归档流一个快照、提及时取最后一次＝当前运行逻辑"）——**本包已落地**（`memoryos_elements` 的 `save`／`context`；内核 `python/memoryos_kernel/snapshot.py`）：`save` 落 `<数据根>/exports/<元素>_snap_<YYYYMMDD-HHMM>.md`，**并往时间线写一个点**（`source=snapshot`、`ref=` 档名），顺带重建 `exports/INDEX.md`；`context` 取最新快照并附"自快照以来新增了什么"。历史视角另由 `timeline as_of=<日期>` 支撑（内核 `events_of(as_of=…)`：只看该日及之前、不计入时间未定的 pending）。设计与判据＝`JUDGMENTS.md` §5.9.7。
 
 ---
 

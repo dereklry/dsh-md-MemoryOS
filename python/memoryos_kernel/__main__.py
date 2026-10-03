@@ -1,7 +1,7 @@
 """memoryos_kernel.__main__ — 共享包内的精简 CLI（只覆盖元素-时间线主线）。
 
 与上游内核的 cli.py（2472 行、混编台账命令）刻意分开：这里只做**薄封装**，
-命令集＝ init / ingest / timeline / snapshot / all / expire / export / status。
+命令集＝ init / ingest / import / timeline / snapshot / save / index / context / all / expire / export / status。
 JS 侧（lib/kernel.js）就是 spawn 这个入口，一命令一次调用。
 
 用法：
@@ -21,6 +21,7 @@ import sys
 
 from . import extract as kx
 from . import paths
+from . import snapshot as ksn
 from . import timeline as ktl
 from .db import KernelDB
 
@@ -77,8 +78,13 @@ def main(argv=None) -> int:
     pt.add_argument("--limit", type=int, default=200)
     pt.add_argument("--status", default="active", help="active（默认）| expired | pending | all＝不过滤")
     pt.add_argument("--as-of", default="", help="历史视角：只看该日期（YYYY-MM-DD）及之前（时间未知的 pending 不计入）")
-    ps = sub.add_parser("snapshot", help="元素当前快照")
+    ps = sub.add_parser("snapshot", help="元素当前快照（--save 拍一份落盘，并往时间线写一个点）")
     ps.add_argument("element")
+    ps.add_argument("--save", action="store_true", help="拍快照：落 <数据根>/exports/<元素>_snap_<stamp>.md 并写时间线点")
+    ps.add_argument("--note", default="", help="仅 --save：写进快照的备注")
+    pc = sub.add_parser("context", help="取最新快照（＝当前运行逻辑）＋自快照以来新增的事件")
+    pc.add_argument("element")
+    sub.add_parser("index", help="重建 <数据根>/exports/INDEX.md 快照索引")
     pa = sub.add_parser("all", help="全部时间线（元素清单）")
     pa.add_argument("--since", default="")
     pe = sub.add_parser("expire", help="按内容片段标失效")
@@ -112,7 +118,16 @@ def main(argv=None) -> int:
         _out(ktl.timeline(db, a.element, since=a.since, status=st, limit=a.limit, as_of=a.as_of))
         return 0
     if a.cmd == "snapshot":
-        _out(ktl.snapshot(db, a.element))
+        if a.save:
+            _out(ksn.save_snapshot(db, a.element, note=a.note))
+        else:
+            _out(ktl.snapshot(db, a.element))
+        return 0
+    if a.cmd == "context":
+        _out(ksn.context(db, a.element))
+        return 0
+    if a.cmd == "index":
+        _out(ksn.rebuild_index())
         return 0
     if a.cmd == "all":
         _out(ktl.all_timelines(db, since=a.since))

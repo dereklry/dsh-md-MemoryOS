@@ -87,16 +87,30 @@ def main() -> int:
         if len(evs3) != 1 or evs3[0].get("ts") != "2026-10-01":
             fails.append(f"as_of 历史视角应只看到 2026-10-01 那一条：out={p.stdout[:200]}")
 
+        # 多点快照：save 落盘 + 往时间线写一个点 + 重建 INDEX；context 取最新快照
+        p, d = run(["snapshot", "某交易逻辑", "--save", "--note", "第一版"], tmp)
+        if p.returncode != 0 or not d or not d.get("ok") or not (d.get("timeline_point") or {}).get("inserted"):
+            fails.append(f"save 应落盘并往时间线写一个点：out={p.stdout[:240]} err={p.stderr[:160]}")
+        exp = os.path.join(tmp, "elements", "exports")
+        if not os.path.isfile(os.path.join(exp, "INDEX.md")):
+            fails.append("save 后应重建 exports/INDEX.md")
+        p, d = run(["context", "某交易逻辑"], tmp)
+        if not d or not d.get("snapshot") or not d.get("content"):
+            fails.append(f"context 应取到最新快照与内容：out={p.stdout[:240]}")
+        p, d = run(["index"], tmp)
+        if not d or d.get("files") != 1:
+            fails.append(f"index 应报 1 份快照：out={p.stdout[:200]}")
+
         p, d = run(["status"], tmp)
-        if not d or ((d.get("counts") or {}).get("events") != 3):
-            fails.append(f"status 应报 events=3（ingest 1 + import 2）：out={p.stdout[:200]}")
+        if not d or ((d.get("counts") or {}).get("events") != 4):
+            fails.append(f"status 应报 events=4（ingest 1 + import 2 + 快照点 1）：out={p.stdout[:200]}")
 
     if fails:
         print("FAIL")
         for f in fails:
             print(" -", f)
         return 1
-    print("ALL PASS (kernel smoke: 12 checks)")
+    print("ALL PASS (kernel smoke: 16 checks)")
     return 0
 
 
