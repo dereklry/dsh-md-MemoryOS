@@ -895,6 +895,23 @@ function makeCorpus(dir) {
   for (const f of ['docs/WORKFLOW.md', 'docs/AGENT-GUIDE.md', 'docs/DESIGN.md', 'docs/JUDGMENTS.md']) {
     ok(docs['README.md'].includes(f), `K7b README 索引指向 ${f}（四份文档都得有入口，写了没人读＝没写）`)
   }
+
+  // K12 工具参数 schema 必须能过真实内核的编译器（2026-10-03 由冒烟副本实测抓到的真 bug）
+  // `required` 只允许 true 或整体省略；写 false 会让 dsh-tools 的 schema 编译器直接抛
+  //   JsonSchemaError: parameters.X.required must be true when present
+  // 后果＝**整个插件 entry 不激活**（宿主 stderr 只给一行 "1 entry did not activate"）。
+  // 本闸用 defineTool 恒等替身，走不到那个编译器 ⇒ 只能靠这条静态禁手兜住。
+  const badReq = idx.match(/required:\s*false/g) || []
+  ok(badReq.length === 0, `K12 工具参数不写 required:false（现 ${badReq.length} 处；真实内核会拒装整个插件）`)
+
+  // K13 工具 output 契约（同轮由冒烟副本抓到的第二个真 bug）
+  // 真实 dsh-tools 要求 output = { schema: <value schema 对象>, render: fn }：
+  //   schema: 'text' → JsonSchemaError: schema must be a value schema object；缺 render → 装载期崩整棵树。
+  // 本闸同样用替身，只有静态禁手能兜。
+  const outCount = (idx.match(/output:\s*\{/g) || []).length
+  const renderCount = (idx.match(/render:\s*\(/g) || []).length
+  ok(!/output:\s*\{\s*schema:\s*'/.test(idx), "K13a output.schema 不得写成字符串（真实内核要求 value schema 对象）")
+  ok(outCount > 0 && outCount === renderCount, `K13b 每个工具 output 都带 render（output ${outCount} 处 / render ${renderCount} 处）`)
 }
 
 clean()

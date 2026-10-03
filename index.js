@@ -281,8 +281,11 @@ export function apply(ctx, config) {
     description:
       '读 MemoryOS 功能面板的真实状态：每个功能是 生效中/已关/待配置/降级/不可用/未实现，是谁定的（用户还是模型）、理由与时间，'
       + '缺哪个依赖、还差哪一步（以及那一步该谁做）。判断"某功能为什么没生效"、"该不该建议用户开它"先读这个，别猜。',
-    parameters: { feature: { type: 'string', required: false, description: '只看某个功能（如 jev-engine / graph-search / mining）；省略＝全量摘要' } },
-    output: { schema: 'text' },
+    parameters: { feature: { type: 'string', description: '只看某个功能（如 jev-engine / graph-search / mining）；省略＝全量摘要' } },
+    output: {
+      schema: { type: 'object', additionalProperties: false, properties: { text: { type: 'string' } } },
+      render: (args, value) => [{ type: 'text', text: value.text }],
+    },
     async execute({ feature }) {
       try {
         const s = await buildSnapshot(6)
@@ -317,7 +320,10 @@ export function apply(ctx, config) {
       value: { type: 'string', required: true, description: 'on 或 off' },
       reason: { type: 'string', required: true, description: '为什么切（面板与账本都会显示；不写＝拒绝）' },
     },
-    output: { schema: 'text' },
+    output: {
+      schema: { type: 'object', additionalProperties: false, properties: { text: { type: 'string' } } },
+      render: (args, value) => [{ type: 'text', text: value.text }],
+    },
     async execute({ feature, value, reason }) {
       try {
         const v = String(value || '').trim().toLowerCase()
@@ -344,12 +350,15 @@ export function apply(ctx, config) {
     parameters: {
       action: { type: 'string', required: true, description: 'probe | save-key | where-key | list' },
       reason: { type: 'string', required: true, description: '这次动作为什么做（会落账、面板显示）' },
-      feature: { type: 'string', required: false, description: '为哪个功能做（默认 jev-engine）' },
-      key: { type: 'string', required: false, description: '仅 save-key：用户明确交给你代存的 Key' },
-      path: { type: 'string', required: false, description: '仅 save-key：实在要落文件时给路径（放 ~/.dsh 下，别放仓里）' },
-      allow_in_repo: { type: 'string', required: false, description: '仅 save-key：把 "true" 传进来才允许落在 git 工作树内（默认拒；用完请搬家）' },
+      feature: { type: 'string', description: '为哪个功能做（默认 jev-engine）' },
+      key: { type: 'string', description: '仅 save-key：用户明确交给你代存的 Key' },
+      path: { type: 'string', description: '仅 save-key：实在要落文件时给路径（放 ~/.dsh 下，别放仓里）' },
+      allow_in_repo: { type: 'string', description: '仅 save-key：把 "true" 传进来才允许落在 git 工作树内（默认拒；用完请搬家）' },
     },
-    output: { schema: 'text' },
+    output: {
+      schema: { type: 'object', additionalProperties: false, properties: { text: { type: 'string' } } },
+      render: (args, value) => [{ type: 'text', text: value.text }],
+    },
     async execute(args) {
       try {
         const r = await runSetup(args || {})
@@ -371,11 +380,14 @@ export function apply(ctx, config) {
       + '文件类型本版本固定 .md——**不要**向用户承诺能管别的类型（那要改扫描与索引，见 docs/DESIGN.md）。',
     parameters: {
       action: { type: 'string', required: true, description: 'list | add-root | drop-root | add-exclude | drop-exclude | preview' },
-      path: { type: 'string', required: false, description: '目录（add-root/drop-root 必填；绝对路径或 ~ 开头）' },
-      pattern: { type: 'string', required: false, description: '排除规则（add-exclude/drop-exclude/preview 必填）' },
-      reason: { type: 'string', required: false, description: '为什么改（写操作必带，面板会显示"是谁、为什么"）' },
+      path: { type: 'string', description: '目录（add-root/drop-root 必填；绝对路径或 ~ 开头）' },
+      pattern: { type: 'string', description: '排除规则（add-exclude/drop-exclude/preview 必填）' },
+      reason: { type: 'string', description: '为什么改（写操作必带，面板会显示"是谁、为什么"）' },
     },
-    output: { schema: 'text' },
+    output: {
+      schema: { type: 'object', additionalProperties: false, properties: { text: { type: 'string' } } },
+      render: (args, value) => [{ type: 'text', text: value.text }],
+    },
     async execute(args) {
       try {
         const a = String((args && args.action) || 'list').trim().toLowerCase()
@@ -480,15 +492,18 @@ export function apply(ctx, config) {
       + '图是派生缓存：删了可重建；改了资料就 build 一次（面板「资料面」页也有重建按钮）。',
     parameters: {
       action: { type: 'string', required: true, description: 'status | build | light | check | archive-check' },
-      query: { type: 'string', required: false, description: '仅 light：要查的词、条目号（如 AA14）或文件名' },
-      expand: { type: 'boolean', required: false, description: '仅 light：要邻域地图（谁指谁＋reason）＝true；默认 false 只给落点清单（小而直达）' },
-      depth: { type: 'number', required: false, description: '仅 light+expand:true：子图深度 1~3（默认 2；越大越费上下文）' },
-      max_nodes: { type: 'number', required: false, description: '仅 light：子图最多多少节点（默认 45）' },
-      reason: { type: 'string', required: false, description: '仅 build：为什么重建（面板与账本会显示；建图本身零账）' },
-      file: { type: 'string', required: false, description: '仅 archive-check·调试：只查这一份（默认按 git 未提交新增自动收集）' },
-      no_refresh: { type: 'boolean', required: false, description: '仅 archive-check·调试：跳过查前重建（正常要重建，否则新文件没入图、边查不到）' },
+      query: { type: 'string', description: '仅 light：要查的词、条目号（如 AA14）或文件名' },
+      expand: { type: 'boolean', description: '仅 light：要邻域地图（谁指谁＋reason）＝true；默认 false 只给落点清单（小而直达）' },
+      depth: { type: 'number', description: '仅 light+expand:true：子图深度 1~3（默认 2；越大越费上下文）' },
+      max_nodes: { type: 'number', description: '仅 light：子图最多多少节点（默认 45）' },
+      reason: { type: 'string', description: '仅 build：为什么重建（面板与账本会显示；建图本身零账）' },
+      file: { type: 'string', description: '仅 archive-check·调试：只查这一份（默认按 git 未提交新增自动收集）' },
+      no_refresh: { type: 'boolean', description: '仅 archive-check·调试：跳过查前重建（正常要重建，否则新文件没入图、边查不到）' },
     },
-    output: { schema: 'text' },
+    output: {
+      schema: { type: 'object', additionalProperties: false, properties: { text: { type: 'string' } } },
+      render: (args, value) => [{ type: 'text', text: value.text }],
+    },
     async execute(args) {
       try {
         const r = runGraph({ ...args, by: 'llm' })
