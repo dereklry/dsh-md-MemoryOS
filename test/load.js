@@ -1022,6 +1022,11 @@ function makeCorpus(dir) {
   const badCalls = hookComps.filter((n) => new RegExp(`[^\\w.]${n}\\(\\{`).test(cl))
   ok(hookComps.length > 0 && badCalls.length === 0,
     `K14 带 hooks 的组件不得被当普通函数调用（组件：${hookComps.join(' ')}｜违规：${badCalls.join(' ') || '无'}）`)
+
+  // K15 面板默认落页＝概览且在页签首位（2026-10-03 用户令："概览，调整排到最前面"）。
+  // 钉住它的理由：页签顺序/默认落页没有任何报错路径——被谁改回去都不会有人发现。
+  ok(/var TABS = \[\["overview"/.test(cl) && /useState\("overview"\)/.test(cl),
+    'K15 面板 TABS 首位＝概览，且默认 tab＝overview（用户定的进门第一眼）')
 }
 
 clean()

@@ -448,14 +448,16 @@ window.__ModuleLoader__.load({
 					e("div", { style: ST.meta }, "本页**只读**：入库／拍快照／标失效都走模型工具 memoryos_elements——与\"面板是薄壳、写侧唯一入口\"一致，这里不另开写入口。")));
 		}
 
-		var TABS = [["feat", "功能开关"], ["surface", "资料面"], ["elements", "元素库"], ["overview", "概览"], ["deps", "依赖与路径"], ["ledger", "账本"]];
+		// 2026-10-03 用户定：**概览排最前**（它回答"现在什么在跑、花了什么"，是进门第一眼该看的），
+		// 后续顺序＝功能开关｜资料面｜元素库｜依赖与路径｜账本。
+		var TABS = [["overview", "概览"], ["feat", "功能开关"], ["surface", "资料面"], ["elements", "元素库"], ["deps", "依赖与路径"], ["ledger", "账本"]];
 
 		function Panel() {
 			var st = useState(null), snap = st[0], setSnap = st[1];
 			var bs = useState(false), busy = bs[0], setBusy = bs[1];
 			var ms = useState(""), msg = ms[0], setMsg = ms[1];
 			var es = useState(""), err = es[0], setErr = es[1];
-			var ts = useState("feat"), tab = ts[0], setTab = ts[1];
+			var ts = useState("overview"), tab = ts[0], setTab = ts[1];	// 默认落页＝概览（与 TABS 首位一致）
 
 			var load = useCallback(function () {
 				setBusy(true);
