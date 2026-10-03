@@ -20,11 +20,30 @@
 | `surface-admin` | user | **live** | 资料面管理：看/改管理范围（只数文件名，不读内容） |
 | `graph-search` | both | **live** | 指针图：建图／`light` 落点（含零命中正文兜底）／`check` 体检（纯本地零账，秒级） |
 | `element-db` | both | **live** | 元素库（元素-时间线内核）：内核**随包发**（`python/memoryos_kernel`，读面纯标准库），落本地 SQLite（元素·事件·链接·决策）；无 Key 也能用规则层抽取；**缺 python 只降级这一个功能**（`DEPS.python` 非致命） |
-| `scaffold` | user | todo | 首次建档（四层骨架 + 资料表初稿） |
 | `mining` | llm | todo | 候选生成（查空的词→别名、反复读的→资料行） |
 | `maintain` | user | todo | 定时维护（build + check → 候选队列） |
 
 `impl: 'todo'` 的功能**在面板上灰显且不给任何按钮**（`mayWrite()` 直接拒绝）：面板不许骗人。搬入一个器官＝把 `impl` 改成 `live`，同时它的开关与状态自动生效，无需改面板。
+
+### 1.1 安装状态机 ≠ 功能（2026-10-03 用户定，本包的一条硬边界）
+
+| | **功能（`FEATURES`）** | **安装/引导步骤（`STEPS` + `BOOTSTRAP`）** |
+|---|---|---|
+| 性质 | 常驻能力 | **一次性任务** |
+| 有没有开关 | 有（默认值＋成本＋可开可关） | **没有**（只有"做没做过"） |
+| 判据 | `deriveState`（on/off/waiting/degraded/…） | 步骤探针 `done/why` |
+| 谁做 | `controller`（user/llm/both） | `by`（user/llm） |
+| 重复执行 | 随时可关可开 | 必须**幂等**（建档只写 marker 块；重复跑＝只更新块内） |
+| 面板上长在哪 | 「功能开关」页一行 | 「概览」页的**首次安装向导卡** |
+| 例子 | `graph-search`／`surface-admin`／`jev-engine`／`element-db` | `workspace-rooted`→`hub-declared`→`leaves-managed`→`graph-built`→`checked-once`→`memory-scaffolded` |
+
+**首次建档（scaffold）就是按这条边界从功能表里搬出来的**：它是安装的最后一格（`memoryos_setup(action='scaffold')`），不是"一个可以常开的器官"。
+**向导是建议链、不是门槛**：`BOOTSTRAP` 的格子可以跳过（`skippable`），跳了照样能用 `light`，只是少了那一层。
+
+**数据形状（面板与模型读同一份，不各写一套）**：`BOOTSTRAP = [{ id, label, by, why, def, options:[{id,label,hint}], skippable }]`
+· `id` 必须也在 `STEPS` 里（闸锁同源；反过来每个 `STEPS` 格子要么被功能引用、要么在 `BOOTSTRAP` 里，防止"孤儿格"）；
+· `snapshot.bootstrap = { steps:[{…,done,why_not}], total, doneCount, ready, next, candidates[] }`——`candidates` 只在下一格是「划范围」时给（工作区候选：默认＝包含进程 cwd 的那个工作区，备选＝其它工作区／进程目录／自己挑）；
+· 模型侧入口 `memoryos_setup(action='bootstrap')`（一次读全链）与 `action='scaffold'`（建档，默认 dry-run）。
 
 > **2026-10-02 与代码对齐（用户令："先移除共享包里关于 jev 的功能描述，与代码对齐"）**：`find`（按需语义寻路）与 `radar`（每回合自动指路）**已从登记表删除**——**find 这条路本项目试过**（寻路表维护量大＋每次调用产生账单），**评估后从模块摘除**、本包不含该实现（`radar` 同样不在本包）；登记它们＝面板上写着一条本包没有的能力（"假开"）。本包的检索能力**只有词法**：`light`（落点/专档/零命中正文兜底）+ `check`；**"只有事、没有词"在本包答不了**。理由与将来要接 find 的前置条件＝`JUDGMENTS.md` §5.6。
 

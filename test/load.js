@@ -864,6 +864,87 @@ function makeCorpus(dir) {
     'Q13c 非专档的回指文件只报计数（不把索引摊开）')
 }
 
+// ————————————————————————————————— W 首次运行向导（安装＝状态机，不是功能；2026-10-03 用户定）
+{
+  // W1 登记层自洽：BOOTSTRAP 的每一格都得是 STEPS 里真实存在的格子；反向也不能有"没人看得见的孤儿格"
+  const bs = F.BOOTSTRAP || []
+  ok(bs.length >= 4 && bs.every((b) => F.STEPS[b.id]), `W1 BOOTSTRAP 的格子都在 STEPS 里（${bs.map((b) => b.id).join(' → ')}）`)
+  const referenced = new Set(F.FEATURES.flatMap((f) => f.steps || []))
+  const orphanSteps = Object.keys(F.STEPS).filter((id) => !referenced.has(id) && !bs.some((b) => b.id === id))
+  ok(orphanSteps.length === 0, `W1b 每个 STEPS 格子要么被功能引用、要么在向导链里（孤儿格＝永远没人看得见的待办；违规：${orphanSteps.join(' ') || '无'}）`)
+  ok(bs.every((b) => b.label && b.why && b.def && (b.by === 'llm' || b.by === 'user') && typeof b.skippable === 'boolean'),
+    'W1c 每格都有：标签／为什么／**默认怎么做**／谁做／可跳过（用户口径：先给默认，再给备选）')
+  ok(bs.every((b) => Array.isArray(b.options) && b.options.length >= 1 && b.options.every((o) => o.id && o.label)),
+    'W1d 每格至少给一个备选（默认优先＋几个选项让人选）')
+  ok(!F.featureOf('scaffold') && bs.some((b) => b.id === 'memory-scaffolded'),
+    'W1e 首次建档**不在功能表**里（它不是功能），而是向导链的最后一格')
+
+  // W2 端到端：把"首次运行"整条链真跑一遍（临时语料，零网络）
+  const wdir = path.join(tmp, 'wizard')
+  mkdirSync(path.join(wdir, 'notes', 'drafts'), { recursive: true })
+  writeFileSync(path.join(wdir, 'HANDBOOK.md'), L('# 手册', '', '> 档位：中枢 ｜ 指针条目=AA1', '', '## 主题', '', '- 见 [notes/alpha.md](notes/alpha.md)', ''), 'utf8')
+  writeFileSync(path.join(wdir, 'notes', 'alpha.md'), L('# Alpha', '', '### AA1 装插件要按七步走', '- **触发**：装插件怎么走', '', '正文一句。', '', '### AA2 没人指的条目', '（故意不留触发行）', ''), 'utf8')
+  writeFileSync(path.join(wdir, 'notes', 'beta.md'), L('# Beta', '', '### AA3 第三个条目', '- **触发**：beta 怎么用', '见 `HANDBOOK.md`。', ''), 'utf8')
+  const regsW = [], routesW = []
+  const subW = { get: (x) => (x === 'webServer' ? { register: (r) => { routesW.push(r); return () => {} } } : undefined), logger: { info() {}, warn() {} }, tools: { register: (t) => { regsW.push(t); return () => {} } } }
+  const dW = H.apply({ logger: subW.logger, tools: subW.tools, get: subW.get, inject: (_dd, cb) => cb(subW) },
+    { dataDir: path.join(tmp, 'hgw'), graphStaleHours: 24 })   // 刻意**不给 memoryRoot**：这才是"首次运行"的真实起点
+  const postW = (p, body) => new Promise((res) => {
+    const route = routesW.find((r) => r.path === A.PREFIX + p)
+    const req = { on: (ev, fn) => { if (ev === 'data') fn(JSON.stringify(body || {})); if (ev === 'end') fn() }, destroy() {} }
+    const rr = { writeHead: (c) => { rr.code = c }, end: (s) => res({ code: rr.code, body: JSON.parse(s) }) }
+    route.handler(req, rr)
+  })
+  const bsnap = (await postW('/snapshot', {})).body.snapshot
+  const sW = regsW.find((t) => t.name === 'memoryos_setup'), gW = regsW.find((t) => t.name === 'memoryos_graph')
+  ok(!!(sW && gW), 'W2 向导要用到的两个工具都在（setup / graph）')
+  const b1 = await sW.execute({ action: 'bootstrap', reason: '首次运行' })
+  ok(/首次安装向导（\d\/\d+）/.test(b1.text) && bsnap.bootstrap && Array.isArray(bsnap.bootstrap.steps),
+    `W3 bootstrap 一次读全链（进度＋逐格）：${(bsnap.bootstrap.steps || []).map((s) => (s.done ? '✓' : '○') + s.id).join(' ')}`)
+  const nx = bsnap.bootstrap.next
+  ok(nx && /默认这么做/.test(b1.text) && (nx.options || []).length >= 1 && /也可以选/.test(b1.text),
+    `W3b 下一格＝${nx && nx.id}，且**先给默认、再给备选**（用户口径）`)
+  ok((bsnap.bootstrap.candidates || []).some((c) => c.def) === (nx.id === 'workspace-rooted'),
+    'W3c 候选目录只在"划范围"那一格给（不串格）')
+  // W3d 第一格的动作真的能把它推过去：面板/模型加一个根 ⇒ 该格转 ✓
+  const sfcW = regsW.find((t) => t.name === 'memoryos_surface')
+  const addW = await sfcW.execute({ action: 'add-root', path: wdir, reason: '向导第 1 格：默认纳管工作区' })
+  ok(addW.ok !== false && (await postW('/snapshot', {})).body.snapshot.bootstrap.steps.find((s) => s.id === 'workspace-rooted').done === true,
+    'W3d 「划范围」的动作（add-root）做过 ⇒ 该格 ✓（一次性：不设新鲜期）')
+  const built = await gW.execute({ action: 'build' })
+  ok(built.ok !== false, 'W4 建图可用（向导第 4 格的动作）')
+  const chk = await gW.execute({ action: 'check', reason: '向导第 5 格：体检一次' })
+  ok(/体检/.test(chk.text), 'W5 体检可用（向导第 5 格）')
+  const bsnap2 = (await postW('/snapshot', {})).body.snapshot
+  ok(bsnap2.bootstrap.steps.find((s) => s.id === 'checked-once').done === true,
+    'W5b 体检过 ⇒ 该格转 ✓（一次性步骤：不设新鲜期）')
+  const dryW = await sW.execute({ action: 'scaffold', reason: '向导最后一格' })
+  ok(/建档扫描/.test(dryW.text) && /这是 dry-run/.test(dryW.text)
+    && !existsSync(path.join(wdir, 'MEMORY.md')),
+    'W6 建档**默认 dry-run**：给汇报、一个文件都不写')
+  ok(/建议先补的三条/.test(dryW.text) && /AA2/.test(dryW.text),
+    'W6b 汇报点出"建议先补的三条"，且优先真条目（三级及以下标题里缺触发行的那个）')
+  const wrW = await sW.execute({ action: 'scaffold', reason: '落盘', write: true })
+  const names = ['MEMORY.md', 'MEMORY-INDEX.md', 'MEMORY-ENTRIES.md', 'MEMORY-MAP.md']
+  ok(names.every((n) => existsSync(path.join(wdir, n))) && /✓ 已写/.test(wrW.text),
+    'W7 落盘：四份骨架齐活，且只在显式 write=true 时发生')
+  const mem = readFileSync(path.join(wdir, 'MEMORY.md'), 'utf8')
+  ok(/档位：中枢/.test(mem) && /MEMORYOS:BEGIN summary/.test(mem) && /MEMORYOS:END summary/.test(mem),
+    'W7b 生成的 MEMORY.md 自带中枢声明＋marker 块（重复跑只更新块内，不碰正文）')
+  const b3 = await sW.execute({ action: 'bootstrap', reason: '收口' })
+  const bsnap3 = (await postW('/snapshot', {})).body.snapshot
+  ok(bsnap3.bootstrap.ready === true && /全部完成/.test(b3.text),
+    'W8 建档后向导就绪（6/6）："全部完成"＋三句"接下来怎么用"')
+  // W9 marker 语义：没有 marker 的文件**拒绝覆盖**（那是用户自己的正文）
+  const MP = await import(pathToFileURL(path.join(PKG, 'lib', 'scaffold.js')).href)
+  ok(MP.mergeBlock('# 我自己的手册\n正文\n', 'summary', 'xx').action === 'refuse',
+    'W9 文件里没有 marker 块 ⇒ 拒绝写（绝不覆盖用户正文）')
+  ok(MP.mergeBlock('A\n<!-- MEMORYOS:BEGIN s -->\nold\n<!-- MEMORYOS:END s -->\nB\n', 's', 'new').text.includes('new')
+    && MP.mergeBlock('A\n<!-- MEMORYOS:BEGIN s -->\nold\n<!-- MEMORYOS:END s -->\nB\n', 's', 'new').text.includes('A'),
+    'W9b 有 marker ⇒ 只替换块内（幂等，重复跑安全）')
+  dW()
+}
+
 // ————————————————————————————————— K 文档与代码对账（四份文档最容易坏在漂移，让它当场变红）
 {
   const idx = readFileSync(path.join(PKG, 'index.js'), 'utf8')
@@ -973,7 +1054,7 @@ function makeCorpus(dir) {
   ok(/## 5\.6/.test(jm) && /不提供语义能力/.test(jm) && /与代码对齐/.test(jm), 'K9a JUDGMENTS §5.6＝本包不提供语义能力（与代码对齐）')
   ok(/描述池/.test(jm) && /transport/.test(jm) && /门控/.test(jm) && /注入式/.test(jm), 'K9b §5.6 给出"要接 find 的前置五件"（描述池/transport/门控/输出契约/注入式闸）')
   ok(/已从登记表删除/.test(docs['docs/AGENT-GUIDE.md']) && !/主力形态/.test(docs['docs/AGENT-GUIDE.md'] + docs['README.md']), 'K9c 两份面向使用的文档明写"已删"、且不再把它说成"主力形态"')
-  ok(/未实现 3/.test(docs['docs/WORKFLOW.md']), 'K9d WORKFLOW 概览计数跟上（删 radar/find ⇒ 未实现 3）')
+  ok(/未实现 2/.test(docs['docs/WORKFLOW.md']) && /首次安装向导/.test(docs['docs/WORKFLOW.md']), 'K9d WORKFLOW 概览计数跟上（删 radar/find/scaffold ⇒ 未实现 2）＋写明先走向导')
   ok(/已随 2026-10-02 的"与代码对齐"修订而改变落点/.test(jm), 'K9e §5.5 顶部有修订横幅指向 §5.6（旧判决保留、落点已改）')
   // K10 过泛处置口径（2026-10-02 用户定：只报一个数、其他细节直接隐去）——四处同口径
   ok(/MAX_STARTS/.test(docs['docs/DESIGN.md']) && /只回一个数/.test(docs['docs/DESIGN.md']), 'K10a DESIGN 写过泛闸（起点闸 8 / 正文闸 40）与"只回一个数"')

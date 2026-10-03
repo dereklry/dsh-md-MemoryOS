@@ -16,7 +16,7 @@
 import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { defineTool } from '@deepseek-ai/dsh-tools'
-import { FEATURES, DEPS, STEPS, GROUPS, featureOf, lintFeatures } from './lib/features.js'
+import { FEATURES, DEPS, STEPS, BOOTSTRAP, GROUPS, featureOf, lintFeatures } from './lib/features.js'
 import { foldLedger, appendSwitch, effectiveValue, deriveState, mayWrite, switchFile, expandHome } from './lib/switches.js'
 import { makeProbes, probeAll, stepAll, envOf } from './lib/probes.js'
 import { foldSetup, recordSetup, probeJev } from './lib/setup.js'
@@ -24,6 +24,7 @@ import { makeKeystore, KEY_REF } from './lib/keystore.js'
 import { foldSurface, appendSurface, surfaceView, effectiveRoots, badRoot, badPattern, preview, MANAGED_EXTS } from './lib/surface.js'
 import { build as buildGraph, load as loadGraph, status as graphStatus, check as graphCheck, checkText, resolveStarts, subgraph, render as renderLight, graphFile, fulltextFallback } from './lib/graph.js'
 import { run as runArchiveGate } from './lib/archive.js'
+import { scaffoldPlan, scaffoldApply, SKELETON_NAMES } from './lib/scaffold.js'
 import { runKernel, resolvePython, kernelDbFile, KERNEL_DIR } from './lib/kernel.js'
 
 /** 路径归一（账本与提示都用正斜杠、去尾斜杠；只用于比较与显示，不改写用户传入的原样值） */
@@ -103,6 +104,31 @@ export function apply(ctx, config) {
   }
 
   // ---------------------------------------------------------------- 快照（唯一状态视图；含异步凭据查询）
+  // ---------------------------------------------------------------- 快照（唯一状态视图；含异步凭据查询）
+  /**
+   * 向导第一格的候选目录（默认优先＋备选，用户口径 2026-10-03）：
+   *   ① **默认**：当前工作区（宿主 `workspaceRegistry` 里，包含进程 cwd 的那个；取不到就取第一个）；
+   *   ② 备选：其余工作区、进程 cwd、以及"自己挑一个目录"（面板走系统目录选择器）。
+   * 一律只报路径与标题，不读内容。
+   */
+  function workspaceCandidates() {
+    const out = []
+    const cwd = normPath(process.cwd())
+    let ws = []
+    try {
+      const reg = typeof ctx.get === 'function' ? ctx.get('workspaceRegistry') : undefined
+      if (reg && typeof reg.list === 'function') ws = reg.list() || []
+    } catch { ws = [] }
+    const paths = ws.map((w) => ({ path: normPath(w && (w.path || w.directory || '')), title: String((w && (w.title || w.name)) || '') })).filter((w) => w.path)
+    const hit = paths.find((w) => cwd && (cwd === w.path || cwd.startsWith(w.path + '/')))
+    const def = hit || paths[0] || (cwd ? { path: cwd, title: '当前进程目录' } : null)
+    if (def) out.push({ kind: 'workspace', path: def.path, title: def.title, def: true })
+    for (const w of paths) if (!def || w.path !== def.path) out.push({ kind: 'workspace', path: w.path, title: w.title, def: false })
+    if (cwd && (!def || cwd !== def.path)) out.push({ kind: 'cwd', path: cwd, title: '进程工作目录', def: false })
+    out.push({ kind: 'pick', path: '', title: '自己挑一个目录（面板会开系统选择器）', def: false })
+    return out
+  }
+
   async function buildSnapshot(limit) {
     const led = foldLedger(cfg.dataDir)
     const setup = foldSetup(cfg.dataDir)
@@ -130,9 +156,31 @@ export function apply(ctx, config) {
     for (const g of Object.keys(byGroup)) byGroup[g].sort((a, b) => a.id.localeCompare(b.id))
     let lines = 0
     try { if (existsSync(led.file)) lines = readFileSync(led.file, 'utf8').split(/\r?\n/).filter((l) => l.trim()).length } catch { lines = 0 }
+    // ---- 首次安装向导（2026-10-03 用户定：一次性安装任务，不是功能）--------------------------------
+    // 面板＝概览页向导卡；模型＝memoryos_setup(action='bootstrap')；**两者读这同一份**（不各写一套）。
+    const bootstrapSteps = BOOTSTRAP.map((b) => {
+      const s = steps[b.id] || {}
+      return {
+        id: b.id, label: b.label, by: b.by, why: b.why, def: b.def,
+        options: (b.options || []).map((o) => ({ id: o.id, label: o.label, hint: o.hint || '' })),
+        skippable: !!b.skippable, done: !!s.done, why_not: s.why || '',
+      }
+    })
+    const nextStep = bootstrapSteps.find((s) => !s.done) || null
+    const bootstrap = {
+      steps: bootstrapSteps,
+      total: bootstrapSteps.length,
+      doneCount: bootstrapSteps.filter((s) => s.done).length,
+      ready: !nextStep,
+      next: nextStep,
+      // 第一格（划范围）的候选目录：默认＝当前工作区；备选＝其它工作区 / 进程 cwd / 自己挑
+      // **只在下一格真是"划范围"时才给**（别把无关数据塞进快照，也别让面板串格）。
+      candidates: nextStep && nextStep.id === 'workspace-rooted' ? workspaceCandidates() : [],
+    }
     return {
       features,
       byGroup,
+      bootstrap,
       ledger: [...led.rows.values()].slice(-Math.max(1, limit || cfg.ledgerTail)).reverse(),
       ledgerMeta: { file: switchFile(cfg.dataDir), exists: existsSync(switchFile(cfg.dataDir)), corrupt: led.corrupt, lines },
       setup: [...setup.rows.values()].reverse().slice(0, Math.max(1, limit || cfg.ledgerTail)),
@@ -276,7 +324,71 @@ export function apply(ctx, config) {
       const s = await buildSnapshot(12)
       return { ok: true, message: `配置账本 ${s.setupMeta.file}（存在=${s.setupMeta.exists}，坏行=${s.setupMeta.corrupt}）；当前待办步骤：` + s.features.filter((f) => f.pending && f.pending.length).map((f) => `${f.id}[${f.pending.map((p) => p.label).join('+')}]`).join(' ') }
     }
-    return { ok: false, message: `未知 action：${action}（可用 probe / save-key / where-key / list）` }
+    // ---- 首次安装向导：一次读全链（哪格做了、下一格是什么、默认怎么做＋备选） ----------------------
+    if (action === 'bootstrap') {
+      const s = await buildSnapshot(8)
+      const b = s.bootstrap
+      const next = b.next
+      const L = [`## 首次安装向导（${b.doneCount}/${b.total}${b.ready ? ' ✅ 就绪' : ''}）`, '']
+      for (const st of b.steps) {
+        L.push(`${st.done ? '✓' : '○'} **${st.label}**（${st.by === 'llm' ? '模型做' : '你/用户做'}）${st.done ? '' : ` — ${st.why_not || ''}`}`)
+      }
+      if (next) {
+        L.push('', `### 下一格：${next.label}`, `- 为什么：${next.why}`, `- **默认这么做**：${next.def}`)
+        if ((next.options || []).length) {
+          L.push('- 也可以选：')
+          for (const o of next.options) L.push(`  - ${o.label}${o.hint ? ` —— ${o.hint}` : ''}`)
+        }
+        if (next.id === 'workspace-rooted') {
+          for (const c of (b.candidates || [])) {
+            if (c.kind === 'workspace') L.push(`  - 备选目录：\`${c.path}\`${c.title ? `（${c.title}）` : ''}${c.def ? ' ← **默认**' : ''}`)
+            else if (c.kind === 'cwd') L.push(`  - 备选目录：\`${c.path}\`（进程工作目录）`)
+            else if (c.kind === 'pick') L.push(`  - ${c.title}`)
+          }
+        }
+        if (next.id === 'memory-scaffolded') L.push('- 落盘才写文件：`action=scaffold, write=true`（默认 dry-run，只给汇报）')
+      } else {
+        L.push('', '全部完成 —— 接下来：查词 `memoryos_graph(action=light)`；写完资料 `build` 一次；提交前 `archive-check`。')
+      }
+      return { ok: true, message: L.join('\n'), bootstrap: b }
+    }
+    // ---- 首次建档（安装向导最后一格）：**默认 dry-run**，先给汇报与骨架草稿 ------------------------
+    if (action === 'scaffold') {
+      const folded = foldSurface(cfg.dataDir)
+      let g = loadGraph(cfg)
+      let built = false
+      if (!g) {
+        const r = buildGraph(cfg, folded, { maxFiles: cfg.graphMaxFiles, maxBytes: cfg.graphMaxBytes })
+        g = r && r.graph
+        built = true
+      }
+      if (!g) return { ok: false, message: '建不了图（可能是还没有记忆根或一份 .md 都没扫到）：先去面板「资料面」纳入目录' }
+      const chk = graphCheck(cfg, folded, g, { maxAgeHours: cfg.graphStaleHours, maxFiles: cfg.graphMaxFiles, exts: MANAGED_EXTS })
+      const plan = scaffoldPlan(cfg, folded, g, chk)
+      const write = body.write === true || String(body.write).toLowerCase() === 'true' || body.dry_run === false
+      if (!write) {
+        return {
+          ok: true,
+          message: plan.report + '\n\n> **这是 dry-run**（一个文件都没写）：要落盘请 `action=scaffold, write=true`——'
+            + `只会写 \`${SKELETON_NAMES.join(' / ')}\` 里**自己认领的 marker 块**，绝不覆盖你的正文。`
+            + (built ? '\n> （顺手替你建了一次图：之前还没有图）' : ''),
+          summary: plan.summary, files: plan.files.map((f) => f.name),
+        }
+      }
+      const res = scaffoldApply(cfg, plan)
+      recordSetup(cfg.dataDir, {
+        step: 'memory-scaffolded', ok: !!res.ok, by: 'llm',
+        note: `写入 ${res.written.map((w) => `${w.name}(${w.action})`).join(' ') || '无'}${res.skipped.length ? `；跳过 ${res.skipped.map((s) => s.name).join(' ')}` : ''}`,
+        reason,
+      })
+      bundle.invalidate()
+      const L = [plan.report, '']
+      if (res.written.length) L.push(`✓ 已写：${res.written.map((w) => `\`${w.name}\`${w.action === 'merge' ? '（只更新 marker 块）' : '（新建）'}`).join('、')} → \`${res.root}\``)
+      for (const s of res.skipped) L.push(`⊘ 跳过 \`${s.name}\`：${s.why}`)
+      L.push('', '> 下一步：`memoryos_graph(action=build)` 重建图（让新骨架进图），然后就能用 `light` 查词了。')
+      return { ok: true, message: L.join('\n'), summary: plan.summary, written: res.written, skipped: res.skipped }
+    }
+    return { ok: false, message: `未知 action：${action}（可用 probe / save-key / where-key / list / bootstrap / scaffold）` }
   }
 
   // ---------------------------------------------------------------- 工具注册
@@ -471,6 +583,13 @@ export function apply(ctx, config) {
     }
     if (action === 'check') {
       const out = graphCheck(cfg, folded, g, { ...opts, maxAgeHours: cfg.graphStaleHours })
+      // 向导第 5 格（`checked-once`）**以"跑过一次"为准**：成功与否都落账，别让探针永远停在"没做过"。
+      recordSetup(cfg.dataDir, {
+        step: 'checked-once', ok: true, by: 'llm',
+        note: `${out.verdict}（缺触发行 ${out.counts.noTrigger}／孤儿 ${out.counts.orphan}）`,
+        reason: String(body.reason || '首次安装向导：体检一次').trim(),
+      })
+      bundle.invalidate()
       return { ok: true, message: checkText(out), counts: out.counts }
     }
     if (action === 'status') {

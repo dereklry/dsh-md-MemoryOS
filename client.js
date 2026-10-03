@@ -164,11 +164,60 @@ window.__ModuleLoader__.load({
 				}));
 		}
 
+		/** 首次安装向导卡（2026-10-03 用户定）：**安装是一次性任务，不是功能**——
+		 *  所以这里没有开关，只有"哪一格做了/下一格是什么/默认怎么做/还能怎么选"。
+		 *  能自己点的给按钮（划范围/建图/体检），只能模型做的给一句"照抄给模型"的话。 */
+		function Wizard(props) {
+			var b = props.snap.bootstrap || { steps: [], total: 0, doneCount: 0, ready: false, next: null, candidates: [] };
+			var act = props.act, busy = props.busy;
+			var rows = (b.steps || []).map(function (s) {
+				return e("div", { key: s.id, style: ST.row },
+					e("span", { style: s.done ? mix(ST.badge, ST.badgeOk) : ST.badge }, s.done ? "✓" : "○"),
+					e("b", { style: { marginRight: 6 } }, s.label),
+					e("span", { style: ST.meta }, "（" + (s.by === "llm" ? "模型做" : "你/用户做") + "）"),
+					s.done ? null : e("span", { style: ST.meta }, s.why_not || ""));
+			});
+			var nx = b.next, actions = [], say = "";
+			if (nx && nx.id === "workspace-rooted") {
+				(b.candidates || []).forEach(function (c, i) {
+					if (c.kind === "workspace" || c.kind === "cwd") {
+						actions.push(e("button", {
+							key: "c" + i, style: c.def ? ST.btn : ST.tab, disabled: busy,
+							"data-sev": "mos:wiz:root:" + i,
+							onClick: function () { act({ path: "/surface", body: { op: "add-root", path: c.path, reason: "向导第 1 格：纳管" + (c.def ? "默认工作区" : "备选目录 " + (c.title || "")) } }); },
+						}, (c.def ? "默认：" : "备选：") + c.path));
+					} else if (c.kind === "pick") {
+						actions.push(e("button", { key: "c" + i, style: ST.tab, disabled: busy, "data-sev": "mos:wiz:pick", onClick: function () { act({ path: "/surface", body: { op: "add-root", path: "", reason: "向导：自己挑目录" } }); } }, "自己挑一个目录（去「资料面」页填路径）"));
+					}
+				});
+			}
+			if (nx && nx.id === "graph-built") actions.push(e("button", { key: "b", style: ST.btn, disabled: busy, "data-sev": "mos:wiz:build", onClick: function () { act({ path: "/graph", body: { action: "build", reason: "向导第 4 格：建指针图" } }); } }, "默认：建指针图"));
+			if (nx && nx.id === "checked-once") actions.push(e("button", { key: "k", style: ST.btn, disabled: busy, "data-sev": "mos:wiz:check", onClick: function () { act({ path: "/graph", body: { action: "check", reason: "向导第 5 格：体检一次" } }); } }, "默认：跑一次体检（结论让模型解释）"));
+			if (nx && nx.by === "llm") {
+				say = nx.id === "hub-declared" ? "让模型起草一份中枢档（HANDBOOK.md，文件头写 `> 档位：中枢`）"
+					: nx.id === "memory-scaffolded" ? "帮我建档（先给我 dry-run 汇报，我点头再落盘）"
+					: "按向导的默认做法，把这一格做掉";
+			}
+			return e("div", { style: ST.card },
+				e("div", { style: ST.h }, "首次安装向导 ",
+					Badge({ text: b.doneCount + "/" + b.total, kind: b.ready ? "ok" : "warn" }),
+					b.ready ? e("span", { style: ST.meta }, " 就绪") : null),
+				nx ? e("div", { style: ST.note }, "下一格：", e("b", null, nx.label), " —— ", nx.why,
+					e("div", { style: ST.meta }, "**默认这么做**：", nx.def),
+					(nx.options || []).length ? e("div", { style: ST.meta }, "也可以选：", (nx.options || []).map(function (o) { return o.label + (o.hint ? "（" + o.hint + "）" : ""); }).join("；")) : null)
+					: e("div", { style: ST.note }, "全部完成 —— 查词走 `memoryos_graph(action=light)`；写完资料 `build` 一次；提交前 `archive-check`。"),
+				actions.length ? e("div", ST.row, actions) : null,
+				say ? e("div", { style: ST.meta }, "这一格该模型做，在对话里说：", e("b", null, "“" + say + "”")) : null,
+				e("div", { style: { marginTop: 8 } }, rows),
+				e("div", { style: ST.meta }, "装完这一步就完事了：本向导是**建议链、不是门槛**（跳过某一格也能用，只是少了那一层）。"));
+		}
+
 		function Overview(props) {
 			var s = props.snap;
 			var n = { on: 0, off: 0, waiting: 0, degraded: 0, unavailable: 0, planned: 0 };
 			for (var i = 0; i < s.features.length; i++) n[s.features[i].state] = (n[s.features[i].state] || 0) + 1;
 			return e("div", { style: ST.page },
+				e(Wizard, { snap: s, busy: props.busy, act: props.act }),
 				e("div", { style: ST.card },
 					e("div", { style: ST.h }, "这套东西管什么"),
 					e("div", { style: ST.note },
