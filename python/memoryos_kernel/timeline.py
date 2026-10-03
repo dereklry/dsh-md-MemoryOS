@@ -16,12 +16,18 @@ from .db import KernelDB
 FORMAT_EVENT = "{ts} {content} [{status}] {ref}"
 
 
-def timeline(db: KernelDB, element: str, since: str = "", status: str = "active", limit: int = 200) -> dict:
-    """拉取单个元素的时间线。element 支持规范名或别名。"""
+def timeline(db: KernelDB, element: str, since: str = "", status: str = "active", limit: int = 200,
+             as_of: str = "") -> dict:
+    """拉取单个元素的时间线。element 支持规范名或别名。
+
+    `status`：`active`（默认）／`expired`／`pending`；**空串＝不过滤**（要"全部"就传 `""`）。
+    `as_of`：**历史视角**——只看该日期及之前的事件（时间未知的 pending 不计入），
+             即"某个时间切面上，这个元素是什么状态"（内核 `events_of(as_of=…)` 的原生能力）。
+    """
     el = db.find_element(element)
     if not el:
         return {"element": element, "found": False, "events": [], "links": []}
-    evs = db.events_of(el["id"], since=since, status=status, limit=limit)
+    evs = db.events_of(el["id"], since=since, status=status, limit=limit, as_of=as_of)
     return {
         "element": el["name"],
         "id": el["id"],
@@ -143,14 +149,20 @@ def _parse_md_timeline(text: str) -> list[dict]:
     return events
 
 
-def import_md_file(db: KernelDB, element: str, md_path: str, source: str = "") -> dict:
-    """从 Markdown 时间线文件导入事件（幂等，重复导入自动去重）。"""
+def import_md_file(db: KernelDB, element: str, md_path: str, source: str = "", category: str = "generic") -> dict:
+    """从 Markdown 时间线文件导入事件（幂等，重复导入自动去重）。
+
+    `element` ＝ 该档归属的元素名（上游 `import-timelines` 的惯例是取**文件名去掉 .md**）。
+    元素不存在时自动建：**共享包版把 category 做成可传、默认 `generic`**——
+    上游这里写死 `stock`（因为只服务 `investments/timelines/`），但本包也用来收主题类档
+    （如"某交易逻辑"），一律标成股票是错的。`category` 由调用方按实际语义给。
+    """
     with open(md_path, encoding="utf-8") as fh:
         text = fh.read()
     evs = _parse_md_timeline(text)
     el = db.find_element(element)
     if not el:
-        el_id, _ = db.upsert_element(name=element, category="stock", tags=["imported"])
+        el_id, _ = db.upsert_element(name=element, category=category, tags=["imported"])
         el = db.find_element(element)
     else:
         el_id = el["id"]

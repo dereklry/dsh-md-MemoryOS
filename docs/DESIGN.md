@@ -251,6 +251,10 @@ python/tests/test_kernel_smoke.py  Python 组闸（内核冒烟 6 条：建库/i
 
 **降级不是兜底，是设计**：`ingest()` 抽失败就落规则层并记 `stats.extract_fallback`（真实降级率可查）；`jev.available()` 在"没 Key／被禁用／熔断窗口内"三种情况下都返回 False ⇒ **直接不试**。任何外部通道挂掉都**不许中断入库**。
 
+**与 md 的双向（"两处都有"是设计，不是同步 bug）**：`import` 把一份 **Markdown 时间线档**按元素导入——认 `- YYYY-MM-DD 内容 [已失效] → 引用` 这类行（`→` 后面进事件的 `ref`），`element` 由调用方给（上游 `import-timelines` 的惯例＝**文件名去掉 `.md` 就是元素名**），**幂等**去重，元素不存在则新建（`category` 默认 `generic`；上游此处写死 `stock`，本包改成可传）；`export` 反向导出 md 镜像（时间线＋元素树与归宿＋产出物索引＋语义关联）。**事实源归属**：md 是人的输入、库是查询/决策端；`import` **只读源档、不改原件**，`export` 产物是**派生镜像**。理由与"两边同时手改＝双写"的判据＝`JUDGMENTS.md` §5.9.6。
+
+**时间线的两种读法**：① **逐条事件**（`- YYYY-MM-DD …`，`timeline` 默认只给 active，`--status all` 给全部）；② **多点快照**（"每次 commit 流一个快照、提及时取最后一次"）——历史视角由 `timeline as_of=<日期>` 支撑（内核 `events_of(as_of=…)`：只看该日及之前、且不计入时间未定的 pending），完整快照落盘／INDEX／取最新那套见 `JUDGMENTS.md` §5.9.7（**本包尚未搬入**）。
+
 ---
 
 ## 4. 状态机（派生，不存储）

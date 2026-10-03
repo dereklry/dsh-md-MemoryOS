@@ -62,16 +62,41 @@ def main() -> int:
         if not d or d.get("matched") != 1:
             fails.append(f"expire 应按片段标失效 1 条：out={p.stdout[:160]}")
 
+        # import：一份 md 按元素导入（幂等；[已失效]→expired；`→ 引用` 进 ref；category 可传不再写死 stock）
+        md = os.path.join(tmp, "某交易逻辑.md")
+        with open(md, "w", encoding="utf-8") as fh:
+            fh.write("- 2026-10-01 建仓 1000 元 → 交易记录.md\n- 2026-10-02 减仓 500 元 [已失效]\n")
+        p, d = run(["import", "--element", "某交易逻辑", "--path", md, "--category", "topic"], tmp)
+        if p.returncode != 0 or not d or d.get("parsed") != 2 or d.get("new") != 2:
+            fails.append(f"import 应解析 2 行、新增 2 条：out={p.stdout[:200]} err={p.stderr[:160]}")
+        p, d = run(["import", "--element", "某交易逻辑", "--path", md, "--category", "topic"], tmp)
+        if not d or d.get("new") != 0:
+            fails.append(f"import 第二次应幂等（new=0）：out={p.stdout[:160]}")
+        p, d = run(["timeline", "某交易逻辑", "--status", "all"], tmp)
+        evs2 = (d or {}).get("events") or []
+        if len(evs2) != 2 or (d or {}).get("category") != "topic":
+            fails.append(f"import 后 timeline 应有 2 条且 category=topic：out={p.stdout[:200]}")
+        if any("交易记录.md" in (e.get("content") or "") for e in evs2):
+            fails.append("import 应把 `→ 引用` 放进事件的 ref 字段，而不是留在 content 里")
+        if not any(e.get("status") == "expired" for e in evs2):
+            fails.append("import 应把 [已失效] 标成 expired")
+
+        # 历史视角（时间切面）：as_of ⇒ 只看该日期及之前
+        p, d = run(["timeline", "某交易逻辑", "--status", "all", "--as-of", "2026-10-01"], tmp)
+        evs3 = (d or {}).get("events") or []
+        if len(evs3) != 1 or evs3[0].get("ts") != "2026-10-01":
+            fails.append(f"as_of 历史视角应只看到 2026-10-01 那一条：out={p.stdout[:200]}")
+
         p, d = run(["status"], tmp)
-        if not d or ((d.get("counts") or {}).get("events") != 1):
-            fails.append(f"status 应报 events=1：out={p.stdout[:200]}")
+        if not d or ((d.get("counts") or {}).get("events") != 3):
+            fails.append(f"status 应报 events=3（ingest 1 + import 2）：out={p.stdout[:200]}")
 
     if fails:
         print("FAIL")
         for f in fails:
             print(" -", f)
         return 1
-    print("ALL PASS (kernel smoke: 6 checks)")
+    print("ALL PASS (kernel smoke: 12 checks)")
     return 0
 
 

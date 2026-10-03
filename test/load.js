@@ -177,6 +177,7 @@ function makeCorpus(dir) {
     if (a === 'timeline') return Promise.resolve({ ok: true, data: { element: '510300', id: 1, category: 'generic', aliases: [], found: true, events: [{ ts: '2026-10-01', content: '买入 510300', source: 'S', status: 'active' }], links: [] } })
     if (a === 'ingest') return Promise.resolve({ ok: true, data: { elements_new: 1, events_new: 1, links_new: 0, llm: false, elements_deferred: ['某新概念'] } })
     if (a === 'all') return Promise.resolve({ ok: true, data: [{ element: '510300', id: 1, events: [{ ts: '2026-10-01' }] }] })
+    if (a === 'import') return Promise.resolve({ ok: true, data: { element: '某交易逻辑', parsed: 3, new: 2 } })
     return Promise.resolve({ ok: true, data: null })
   }
   const disposer = H.apply(ctx, { dataDir, memoryRoot: tmp, transport, kernelCall: fakeKernel, llmCanSwitch: true, modelCanSaveKey: true })
@@ -313,7 +314,12 @@ function makeCorpus(dir) {
   const elAll = await elTool.execute({ action: 'all' })
   ok(/共 1 个元素/.test(elAll.text), 'E30 元素库 all 列出元素清单')
   const elBad = await elTool.execute({ action: 'nope' })
-  ok(/未知动作/.test(elBad.text), 'E31 元素库未知动作给人话（含可用清单）')
+  ok(/未知动作/.test(elBad.text) && /import/.test(elBad.text), 'E31 元素库未知动作给人话（可用清单含 import）')
+  const elImp = await elTool.execute({ action: 'import', element: '某交易逻辑', path: 'X/a.md', category: 'topic' })
+  ok(/已按元素/.test(elImp.text) && /解析 3 行/.test(elImp.text) && /新增事件 2/.test(elImp.text) && /原件没动/.test(elImp.text),
+    'E32 元素库 import 渲染出"解析/新增"并声明只读源档（不改原件）')
+  const elImpBad = await elTool.execute({ action: 'import', element: '缺路径' })
+  ok(/要同时给/.test(elImpBad.text), 'E33 import 缺参数给人话')
 }
 // ————————————————————————————————— G 面板装载契约与静态禁手
 {

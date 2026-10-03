@@ -28,7 +28,7 @@
 | `memoryos_setup` | 配置型功能的准备动作 | `action:'probe'|'save-key'|'where-key'|'list'`、`reason`（必填）、`feature?`、`key?`、`path?`、`allow_in_repo?` |
 | `memoryos_graph` | 建图、按词查**落点**（哪条目/哪文件/哪行）、体检、**提交前归档闸** | `action:'status'|'build'|'light'|'check'|'archive-check'`、`query?`、`expand?`、`depth?`、`max_nodes?`、`reason?`、`file?`、`no_refresh?` |
 | `memoryos_surface` | 看或改**资料面**（哪些目录归 OS 管、排掉哪些子目录与文件） | `action:'list'|'add-root'|'drop-root'|'add-exclude'|'drop-exclude'|'preview'`、`path?`、`pattern?`、`reason`（写操作必填） |
-| `memoryos_elements` | **元素库**（元素-时间线内核，本地 SQLite）：把一段话抽成"元素＋**带时间戳事件**"入库、按元素拉时间线／快照、标失效、导出 md 镜像 | `action:'status'|'ingest'|'timeline'|'snapshot'|'all'|'expire'|'export'`、`text?`、`element?`、`elements?`、`source?`、`since?`、`limit?`、`fragment?`、`path?` |
+| `memoryos_elements` | **元素库**（元素-时间线内核，本地 SQLite）：把一段话抽成"元素＋**带时间戳事件**"入库、把一份 md 按元素导入、按元素拉时间线／快照、标失效、导出 md 镜像 | `action:'status'|'ingest'|'import'|'timeline'|'snapshot'|'all'|'expire'|'export'`、`text?`、`element?`、`elements?`、`source?`、`since?`、`limit?`、`fragment?`、`path?`、`category?` |
 
 读 `memoryos_status` 的典型输出（每行一功能）：
 

@@ -75,6 +75,8 @@ def main(argv=None) -> int:
     pt.add_argument("element")
     pt.add_argument("--since", default="")
     pt.add_argument("--limit", type=int, default=200)
+    pt.add_argument("--status", default="active", help="active（默认）| expired | pending | all＝不过滤")
+    pt.add_argument("--as-of", default="", help="历史视角：只看该日期（YYYY-MM-DD）及之前（时间未知的 pending 不计入）")
     ps = sub.add_parser("snapshot", help="元素当前快照")
     ps.add_argument("element")
     pa = sub.add_parser("all", help="全部时间线（元素清单）")
@@ -84,6 +86,11 @@ def main(argv=None) -> int:
     pe.add_argument("fragment")
     pm = sub.add_parser("export", help="导出 Markdown 镜像")
     pm.add_argument("path")
+    pim = sub.add_parser("import", help="把一份 Markdown 时间线档按元素导入（幂等；文件名去 .md 即元素名是上游惯例）")
+    pim.add_argument("--element", required=True, help="该档归属的元素名（上游惯例＝文件名去 .md）")
+    pim.add_argument("--path", required=True, help="要导入的 .md 路径")
+    pim.add_argument("--source", default="")
+    pim.add_argument("--category", default="generic", help="元素不存在时新建的类别（默认 generic；上游原为写死 stock）")
     sub.add_parser("status", help="库统计（元素/事件/链接/决策）")
 
     a = ap.parse_args(argv)
@@ -101,7 +108,8 @@ def main(argv=None) -> int:
         _out(kx.ingest(db, a.text, source=a.source, manual_elements=elems or None))
         return 0
     if a.cmd == "timeline":
-        _out(ktl.timeline(db, a.element, since=a.since, limit=a.limit))
+        st = "" if str(a.status).lower() == "all" else a.status
+        _out(ktl.timeline(db, a.element, since=a.since, status=st, limit=a.limit, as_of=a.as_of))
         return 0
     if a.cmd == "snapshot":
         _out(ktl.snapshot(db, a.element))
@@ -114,6 +122,12 @@ def main(argv=None) -> int:
         return 0
     if a.cmd == "export":
         _out({"ok": True, "path": ktl.export_md(db, a.path)})
+        return 0
+    if a.cmd == "import":
+        if not os.path.isfile(a.path):
+            _out({"ok": False, "note": f"文件不存在：{a.path}"})
+            return 0
+        _out(ktl.import_md_file(db, a.element, a.path, source=a.source, category=a.category))
         return 0
     return 1
 

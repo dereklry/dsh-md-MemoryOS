@@ -558,6 +558,8 @@ export function apply(ctx, config) {
       const argv = [action, el]
       if (action === 'timeline') {
         if (args.since) argv.push('--since', String(args.since))
+        if (args.status) argv.push('--status', String(args.status))
+        if (args.as_of) argv.push('--as-of', String(args.as_of))
         argv.push('--limit', numArg(args.limit, 200))
       }
       const r = await callKernel(argv)
@@ -612,29 +614,47 @@ export function apply(ctx, config) {
       if (!r.ok) return { ok: false, message: r.message }
       return { ok: true, message: `已导出 Markdown 镜像：${(r.data && r.data.path) || target}` }
     }
-    return { ok: false, message: `未知动作：${action}（可用 status | ingest | timeline | snapshot | all | expire | export）` }
+    if (action === 'import') {
+      const el = String(args.element || '').trim()
+      const p = String(args.path || '').trim()
+      if (!el || !p) return { ok: false, message: 'import 要同时给 element（该档归属的元素名）与 path（要导入的 .md 路径）' }
+      const argv = ['import', '--element', el, '--path', p]
+      if (args.source) argv.push('--source', String(args.source))
+      argv.push('--category', String(args.category || 'generic'))
+      const r = await callKernel(argv, 60000)
+      if (!r.ok) return { ok: false, message: r.message }
+      const d = r.data || {}
+      if (d.ok === false) return { ok: false, message: d.note || '导入失败' }
+      return { ok: true, message: `已按元素「${d.element}」导入：解析 ${d.parsed ?? 0} 行 → 新增事件 ${d.new ?? 0}（重复行自动去重；元素不存在则新建，category=${args.category || 'generic'}）\n注意：只**读**源 md，原件没动。` }
+    }
+    return { ok: false, message: `未知动作：${action}（可用 status | ingest | import | timeline | snapshot | all | expire | export）` }
   }
 
   reg(defineTool({
     name: 'memoryos_elements',
     description:
       'MemoryOS 的**元素库**（元素-时间线内核，随包发的本地 SQLite）：把聊到/写下的**元素 + 带时间戳的事件 + 关联边**固化下来，之后能按元素拉时间线、看快照、标失效、导出 Markdown 镜像。'
-      + '动作：`status`（库规模与落点）｜`ingest`（要 text；把一段话抽成元素+事件入库）｜`timeline`（要 element；某元素按时间的多股绳）｜`snapshot`（要 element；最近状态）｜`all`（库里都有谁）｜`expire`（element+fragment；按内容片段标失效，不删历史）｜`export`（导出 md 镜像）。'
+      + '动作：`status`（库规模与落点）｜`ingest`（要 text；把一段话抽成元素+事件入库）｜`import`（要 element+path；把一份 **Markdown 时间线档**按元素导入）｜`timeline`（要 element；某元素按时间的多股绳）｜`snapshot`（要 element；最近状态）｜`all`（库里都有谁）｜`expire`（element+fragment；按内容片段标失效，不删历史）｜`export`（导出 md 镜像）。'
+      + '**`import` 认的档长这样**：`- YYYY-MM-DD 内容 [已失效] → 引用`（`→` 后面进事件的 `ref`，`[已失效]` 标 expired）；**幂等**——重复导入自动去重；元素不存在则新建（`category` 默认 `generic`，别指望它自动判成"股票"）。上游 `import-timelines` 的惯例是**文件名去掉 `.md` 就当元素名**，本工具要你显式给 `element`。'
+      + '**"md 与库两处都有"的正确口径（别搞成双写）**：**md 是人的输入**、**库是查询/决策端**——`import` 是单向幂等搬运（**读源档、不改原件**），`export` 出来的 md 是**派生镜像**（别手改：要改就改库，或改源 md 后重新导入）。两边同时手改＝双写，迟早对不上、且没有仲裁者。'
       + '**抽取有元素线索才落库**：文本里带 6 位代码，或用 `elements` 显式给已知元素（如 "沪深300ETF,510300"）——这是上游内核的保守模式，宁可少建也不制造碎片元素；真正的未知新元素会作为**待确认候选**返回（`elements_deferred`），你确认后才建。'
       + '**无 API Key 也能用**：规则层解析时间（ISO/中日韩日期/今天昨天/相对天数）与元素线索；有 Key 时才走 LLM 精抽，失败自动降级（结果里会写"抽取＝规则层"）。'
       + '**事件铁律**：没有时间属性的事件落 `ts=""` 进**待定区**（status=pending），不伪造时间；历史只追加、失效用标记不删除。'
       + '库落 `<数据根>/elements/memory.db`（与指针图分开两个数据根）；python 找不到时**只这一个工具不可用**，面板与词法检索照常。'
       + '它管的是**结构化事实**（谁在什么时候做了什么）；"这件事该读哪份 md"仍走 memoryos_graph 的词法落点——两者不是一回事，别互相替代。',
     parameters: {
-      action: { type: 'string', required: true, description: 'status | ingest | timeline | snapshot | all | expire | export' },
+      action: { type: 'string', required: true, description: 'status | ingest | import | timeline | snapshot | all | expire | export' },
       text: { type: 'string', description: '仅 ingest：要固化进元素库的那段话' },
       source: { type: 'string', description: '仅 ingest：来源标注（如对话/文件名，便于回溯）' },
       elements: { type: 'string', description: '仅 ingest：已知元素，逗号分隔（给了它就走保守模式：不新建元素，未知名挂到主元素）' },
-      element: { type: 'string', description: '仅 timeline/snapshot/expire：元素名或代码' },
+      element: { type: 'string', description: '仅 timeline/snapshot/expire/import：元素名或代码（import 时＝该档归属的元素名）' },
       since: { type: 'string', description: '仅 timeline/all：只看该日期（YYYY-MM-DD）之后' },
+      as_of: { type: 'string', description: '仅 timeline：**历史视角**——只看该日期及之前（＝"某个时间切面上它是什么状态"；时间未定的 pending 不计入）' },
+      status: { type: 'string', description: '仅 timeline：active（默认）| expired | pending | all＝不过滤' },
       limit: { type: 'number', description: '仅 timeline：最多几条（默认 200）' },
       fragment: { type: 'string', description: '仅 expire：要标失效的内容片段' },
-      path: { type: 'string', description: '仅 export：导出文件路径（默认 <数据根>/elements/timeline-export.md）' },
+      path: { type: 'string', description: 'export：导出文件路径（默认 <数据根>/elements/timeline-export.md）｜import：要导入的 .md 路径' },
+      category: { type: 'string', description: '仅 import：元素不存在时新建的类别（默认 generic；上游原为写死 stock）' },
     },
     output: {
       schema: { type: 'object', additionalProperties: false, properties: { text: { type: 'string' } } },

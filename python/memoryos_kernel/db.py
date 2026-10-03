@@ -705,10 +705,9 @@ class KernelDB:
         self.conn.commit()
         return True, f"depth={depth}"
 
-    def element_children(self, element_id: int) -> list[dict]:
-        return [dict(r) for r in self.conn.execute(
-            "SELECT * FROM elements WHERE parent_id=? ORDER BY name", (element_id,)
-        )]
+    # 注：`element_children` 在下面还有一份**更全**的实现（主归属子 + memberships 挂靠子，带 via 标记）；
+    # 同名重复定义时后者覆盖前者 ⇒ 只查 parent_id 的那一版曾是**死代码**，已于 2026-10-03 删除。
+    # 别再往类里加第二份同名方法。
 
     def element_ancestors(self, element_id: int) -> list[int]:
         """祖先链（自底向上），含自身。"""
