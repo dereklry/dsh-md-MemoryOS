@@ -362,7 +362,93 @@ window.__ModuleLoader__.load({
 					e("div", { style: ST.meta }, "profile 基线（config.memoryRoot）在这是只读的：它属于宿主配置，改它要重启，插件不代写。")));
 		}
 
-		var TABS = [["feat", "功能开关"], ["surface", "资料面"], ["overview", "概览"], ["deps", "依赖与路径"], ["ledger", "账本"]];
+		/** 元素库（元素-时间线内核）：**懒加载**——切到本页才请求 /elements（它要起一次 Python 进程，
+		 *  所以不塞进 /snapshot，否则每次刷新/每次写后都要等它）。本组件带 hooks ⇒ 必须走元素创建
+		 *  （e(组件, props)）；把它当普通函数直接调用会触发 React #310（判据见 JUDGMENTS §5.8）。 */
+		function Elements() {
+			var st = useState(null), data = st[0], setData = st[1];
+			var ls = useState(true), loading = ls[0], setLoading = ls[1];
+			var es = useState(""), err = es[0], setErr = es[1];
+			useEffect(function () {
+				var alive = true;
+				setLoading(true);
+				fetch(API + "/elements", { cache: "no-store" })
+					.then(function (r) { return r.json(); })
+					.then(function (d) {
+						if (!alive) return;
+						if (d && d.ok) { setData(d.elements); setErr(""); }
+						else { setErr((d && d.error) || "元素库信息返回异常"); }
+					})
+					.catch(function (x) { if (alive) setErr("读不到元素库信息：" + String((x && x.message) || x)); })
+					.finally(function () { if (alive) setLoading(false); });
+				return function () { alive = false; };
+			}, []);
+
+			if (!data) {
+				return e("div", { style: ST.card },
+					e("div", { style: ST.h }, loading ? "读取元素库…" : "元素库没有数据"),
+					err ? e("div", { style: ST.note }, err) : null,
+					e("div", { style: ST.meta }, "本页只读：入库／拍快照都走模型工具 memoryos_elements（面板不另开写入口）。"));
+			}
+			var c = data.counts || {};
+			var snaps = data.snapshots || { files: 0, elements: 0, recent: [] };
+			var rows = (data.list || []).slice(0, 40);
+			var all = data.list || [];
+			return e("div", { style: ST.page },
+				e("div", { style: ST.card },
+					e("div", ST.row,
+						e("div", { style: ST.h }, "元素库"),
+						data.available
+							? Badge({ text: "已管理 " + (c.elements || 0) + " 个元素", kind: "ok" })
+							: Badge({ text: "未就绪", kind: "off" }),
+						data.available ? Badge({ text: (c.events || 0) + " 条事件", kind: "off" }) : null,
+						data.pending ? Badge({ text: "待定区 " + data.pending + " 条（无时间属性）", kind: "warn" }) : null,
+						data.available ? Badge({ text: (c.links || 0) + " 条链接", kind: "off" }) : null,
+						snaps.files ? Badge({ text: "快照 " + snaps.files + " 份／" + snaps.elements + " 个元素", kind: "off" }) : null),
+					e("div", { style: ST.meta },
+						"元素 × 带时间戳事件 × 关联边（本地 SQLite；内核随包发，读面纯标准库）。",
+						"｜库：", e("code", { style: ST.code }, String(data.db || "")),
+						data.bytes ? "（" + Math.round(data.bytes / 1024) + " KB）" : "",
+						"｜数据根：", e("code", { style: ST.code }, String(data.dataRoot || ""))),
+					data.available
+						? null
+						: e("div", { style: ST.note }, data.note || "元素库还不可用（缺 Python，或库还没建）——面板如实显示，不假装有数据。")),
+				data.available && rows.length
+					? e("div", { style: ST.card },
+						e("div", { style: ST.h }, "已管理的元素（按最近事件倒序，最多 40 行）"),
+						Table(["元素", "类别", "事件", "最近"], rows, function (r) {
+							return e("tr", { key: r.name, "data-sev": "mos:element:" + r.name },
+								e("td", { style: ST.td }, e("b", null, r.name)),
+								e("td", { style: ST.td }, r.category || "—"),
+								e("td", { style: ST.td }, String(r.events)),
+								e("td", { style: ST.td }, r.last || "（都无时间）"));
+						}),
+						all.length > 40
+							? e("div", { style: ST.meta }, "另有 " + (all.length - 40) + " 个未列出（面板只列前 40，避免一次渲染太多）。")
+							: null)
+					: null,
+				data.available && !rows.length
+					? e("div", { style: ST.card },
+						e("div", { style: ST.h }, "库还是空的"),
+						e("div", { style: ST.meta }, "用模型工具 memoryos_elements(action='ingest', text='…') 把一段话固化进来（文本里带 6 位代码，或显式给元素名）；或用 action='import' 把一份 Markdown 时间线档按元素导入。"))
+					: null,
+				snaps.recent && snaps.recent.length
+					? e("div", { style: ST.card },
+						e("div", { style: ST.h }, "多点快照"),
+						e("div", { style: ST.meta }, "每拍一次＝`exports/` 落一份档 ＋ 时间线上加一个点；\"取最后一次＝当前逻辑\"走模型工具 action='context'。",
+							snaps.index ? e("span", null, "｜索引：", e("code", { style: ST.code }, String(snaps.index))) : null),
+						Table(["元素", "份数", "最新快照"], snaps.recent.slice(0, 20), function (r) {
+							return e("tr", { key: r.element, "data-sev": "mos:snap:" + r.element },
+								e("td", { style: ST.td }, r.element),
+								e("td", { style: ST.td }, String(r.count)),
+								e("td", { style: ST.td }, r.latest || "—"));
+						}))
+					: null,
+				e("div", { style: ST.card },
+					e("div", { style: ST.meta }, "本页**只读**：入库／拍快照／标失效都走模型工具 memoryos_elements——与\"面板是薄壳、写侧唯一入口\"一致，这里不另开写入口。")));
+		}
+
+		var TABS = [["feat", "功能开关"], ["surface", "资料面"], ["elements", "元素库"], ["overview", "概览"], ["deps", "依赖与路径"], ["ledger", "账本"]];
 
 		function Panel() {
 			var st = useState(null), snap = st[0], setSnap = st[1];
@@ -405,6 +491,7 @@ window.__ModuleLoader__.load({
 					e("div", { style: ST.meta }, "面板不缓存快照：点右上「刷新」即重读宿主现算状态。"));
 			} else if (tab === "feat") body = Features({ snap: snap, busy: busy, act: act });
 			else if (tab === "surface") body = e(Surface, { snap: snap, busy: busy, act: act });
+			else if (tab === "elements") body = e(Elements, {});
 			else if (tab === "overview") body = Overview({ snap: snap });
 			else if (tab === "deps") body = Deps({ snap: snap });
 			else body = Ledger({ snap: snap });

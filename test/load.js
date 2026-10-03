@@ -209,6 +209,16 @@ function makeCorpus(dir) {
 
   const s0 = await post('/snapshot')
   ok(s0.code === 200 && s0.body.snapshot.features.length === F.FEATURES.length, 'E7 GET /snapshot ⇒ 每功能一行')
+
+  // 元素库信息面（面板第六个页签的数据；懒加载端点，**不进 snapshot**）
+  const el0 = await post('/elements', {})
+  ok(el0.code === 200 && el0.body.ok && el0.body.elements && typeof el0.body.elements.available === 'boolean',
+    'E37 GET /elements ⇒ 元素库信息面（available／计数／清单／快照索引四段齐）')
+  ok(el0.body.elements.counts && el0.body.elements.counts.elements === 2 && Array.isArray(el0.body.elements.list),
+    'E38 /elements 带规模计数与元素清单——面板那句"已管理多少个元素"就取这里')
+  ok(el0.body.elements.snapshots && Array.isArray(el0.body.elements.snapshots.recent)
+    && el0.body.elements.snapshots.files === 0,
+    'E39 /elements 带快照索引（exports 目录不存在时为空、不报错）')
   ok(feat(s0, 'jev-engine').state === 'off', 'E8 初始：Jev 能力默认关（没测通就不该开着）')
 
   const on1 = await swTool.execute({ feature: 'jev-engine', value: 'on', reason: '试着接上语义引擎' })
@@ -350,7 +360,11 @@ function makeCorpus(dir) {
   const used = [...new Set([...src.matchAll(/"(\/[a-z-]+)"/g)].map((m) => m[1]))] // 含三元里的 "/release" "/takeover"
   ok(used.length >= 4 && used.every((u) => A.API_PATHS.includes(u)), `G6a 面板调的每个路径宿主都注册了（${used.join(' ')}）——漏一个就是静默 404`)
   ok(A.API_PATHS.every((p) => used.includes(p)), `G6b 反向也对账：宿主注册的路径面板全用得上（${A.API_PATHS.join(' ')}）——多出来的路由＝没人认领的写入口`)
-  ok((src.match(/\bfetch\(/g) || []).length === 2, 'G7 fetch 只有两处：load 读 + act 唯一写通路（多一处＝多一套写通路）')
+  // 判据从"fetch 只能两处"改成"只读端点可有各自 fetch，**写必须唯一**"：/elements 是懒加载的
+  // 只读信息面（GET），多它一处不构成"第二套写通路"——真正的红线是写侧不能绕过 act。
+  const fetchCount = (src.match(/\bfetch\(/g) || []).length
+  ok(fetchCount === 3 && /fetch\(API \+ "\/snapshot"/.test(src) && /fetch\(API \+ "\/elements"/.test(src) && /fetch\(API \+ req\.path/.test(src),
+    `G7 fetch 只在两个只读端点 ＋ act 唯一写通路（当前 ${fetchCount} 处：snapshot／elements／act 的 POST）`)
   // 反模式检查只看**代码**，不看注释（否则"解释这条禁令的注释"自己把自己判红——本轮实踩两次：
   // 先是整块注释，后是行尾注释 `order: 120, // …selfevolve(101)…`）
   const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:"'])\/\/[^\n]*/g, '$1')

@@ -13,7 +13,7 @@
  *   失败不 throw（归一成模型可读文本）；不写死本机路径（config > env > 发现链）；
  *   明文 Key 永不进账本、永不进日志；插件不能自己重启（重启归用户）。
  */
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { FEATURES, DEPS, STEPS, GROUPS, featureOf, lintFeatures } from './lib/features.js'
@@ -702,12 +702,80 @@ export function apply(ctx, config) {
     },
   }))
 
+  // ---------------------------------------------------------------- 面板「元素库」页签的数据面
+  // **懒加载**：用户切到那一页才请求。它要起一次内核进程，**不能塞进 /snapshot**
+  //（挂载、刷新、以及每次写后都会重建快照，塞进去会让面板变慢）。带 10 秒 TTL 缓存，
+  // 免得用户连着点刷新时反复 spawn。python 不在 ⇒ 如实说不可用，本函数不抛。
+  const exportsDir = join(cfg.kernelData || join(cfg.dataDir, 'elements'), 'exports')
+  let elementsCache = { at: 0, data: null }
+  const elementsInfo = async () => {
+    const now = Date.now()
+    if (elementsCache.data && now - elementsCache.at < 10_000) return elementsCache.data
+    const out = {
+      available: false,
+      note: '',
+      db: kernelDbFile(cfg),
+      dataRoot: cfg.kernelData || join(cfg.dataDir, 'elements'),
+      exportsDir,
+      counts: null,
+      pending: 0,
+      bytes: 0,
+      list: [],
+      snapshots: { files: 0, elements: 0, index: '', recent: [] },
+    }
+    // ① 快照索引（纯 fs，先给上；目录不存在＝"还没有快照"，不算错）
+    try {
+      const files = readdirSync(exportsDir).filter((f) => f.endsWith('.md'))
+      const snaps = files.filter((f) => f !== 'INDEX.md')
+      const byEl = {}
+      for (const f of snaps) {
+        const m = /^(.+)_snap_(\d{8}-\d{4})\.md$/.exec(f)
+        if (!m) continue
+        ;(byEl[m[1]] = byEl[m[1]] || []).push(m[2])
+      }
+      out.snapshots.files = snaps.length
+      out.snapshots.elements = Object.keys(byEl).length
+      out.snapshots.index = files.includes('INDEX.md') ? join(exportsDir, 'INDEX.md') : ''
+      out.snapshots.recent = Object.keys(byEl).sort().slice(0, 20).map((el) => ({
+        element: el, count: byEl[el].length, latest: byEl[el].sort().slice(-1)[0] || '',
+      }))
+    } catch { /* 还没有 exports 目录 */ }
+    // ② 内核 status（一次 spawn）
+    const st = await callKernel(['status'])
+    if (!st.ok) {
+      out.note = st.message || '内核不可用'
+      elementsCache = { at: now, data: out }
+      return out
+    }
+    const d = st.data || {}
+    if (d.ok === false) {
+      out.note = '库还没建（跑一次 ingest／import 就会自动建）'
+      elementsCache = { at: now, data: out }
+      return out
+    }
+    out.available = true
+    out.counts = d.counts || {}
+    out.pending = d.pending ?? 0
+    out.bytes = d.bytes || 0
+    // ③ 元素清单（再一次 spawn；给面板一张"已管理谁"的表）
+    const al = await callKernel(['all'])
+    const list = Array.isArray(al.data) ? al.data : []
+    out.list = list.map((x) => {
+      const evs = Array.isArray(x.events) ? x.events : []
+      const last = evs.map((e) => e.ts).filter(Boolean).sort().pop() || ''
+      return { name: x.element || x.name || '?', category: x.category || '', events: evs.length, last }
+    }).sort((a, b) => (a.last < b.last ? 1 : a.last > b.last ? -1 : 0))
+    elementsCache = { at: now, data: out }
+    return out
+  }
+
   // ---------------------------------------------------------------- 面板数据面
   disposers.push(createApi(ctx, {
     snapshot: () => buildSnapshot(),
     write: (body) => writeSwitch({ ...body, by: body && body.by === 'llm' ? 'llm' : 'user' }),
     surface: (body) => writeSurface({ ...body, by: body && body.by === 'llm' ? 'llm' : 'user' }),
     graph: (body) => runGraph({ ...body, by: body && body.by === 'llm' ? 'llm' : 'user' }),
+    elements: () => elementsInfo(),
     runtime,
     log,
     warn,

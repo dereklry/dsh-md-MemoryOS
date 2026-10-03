@@ -245,7 +245,7 @@ python/tests/test_kernel_smoke.py  Python 组闸（内核冒烟 6 条：建库/i
 
 **为什么长成这样**（投资场景为什么是"元素×时间线"、为什么不用纯 md／纯检索）＝`JUDGMENTS.md` §5.9。
 
-**怎么用**：模型侧走 `memoryos_elements`（`ingest`／`timeline`／`snapshot`／`all`／`expire`／`export`）；人在设置面板看到的是 `element-db` 那一行的状态（与其它功能同口径：现算、可降级、缺 Python 只影响这一项）。**面板目前没有元素库页**（只有状态行）——那属"待搬入"，不假装已有。
+**怎么用**：模型侧走 `memoryos_elements`（`ingest`／`import`／`save`／`context`／`timeline`／`snapshot`／`all`／`expire`／`export`）；人在设置面板看到两处——`element-db` 那一行的**状态**（与其它功能同口径：现算、可降级、缺 Python 只影响这一项），以及**「元素库」页签**的**数据**（规模计数、元素清单前 40、多点快照索引；走 `/elements` **懒加载、只读**）。
 
 **抽取的两条通道（设计上有，本包当前只发规则层）**：内核里所有"要模型"的环节都靠**外部注入 client**——LLM 通道用 `DEEPSEEK_API_KEY`（`extract.llm_extract`／`relevance.llm_review`／`decide.llm_decide`／`resolve.llm_resolve`／`profile.llm_triage`／`methods`），Jev 快判通道用 `JEV_API_KEY`（`jev_resolve`／`jev_relevance`／`jev_triage`）。**本包的精简 CLI 不注入 client**（`ingest` 只传 text/source/elements）⇒ **当前全链路零 LLM 调用、零 Key 需求**，`ingest` 返回里的 `llm:false` 就是证据。哪天要接，按 `JUDGMENTS.md` §5.9.5：加**显式开关**（默认关），而不是"有 Key 就自动开"。
 
@@ -311,6 +311,7 @@ python/tests/test_kernel_smoke.py  Python 组闸（内核冒烟 6 条：建库/i
 | 方法＋路径 | body | 语义 |
 |---|---|---|
 | `GET /snapshot` | — | `{ok:true, snapshot}`（现算） |
+| `GET /elements` | — | `{ok:true, elements}`（**元素库信息面**：规模计数＋元素清单＋快照索引。**专给懒加载**，不进 snapshot——它要起一次内核进程，塞进每次刷新就等于每次点什么都等 Python；服务端另有 10 秒 TTL 缓存） |
 | `POST /switch` | `{feature,value,reason?}` | 用户切开关（不填理由也放行——面板是主人） |
 | `POST /takeover` | `{feature,value}` | 写 `lock:true`（接管，模型出局） |
 | `POST /release` | `{feature,value}` | 写 `lock:false`（解除接管） |
@@ -349,7 +350,7 @@ python/tests/test_kernel_smoke.py  Python 组闸（内核冒烟 6 条：建库/i
 
 ### 6.4 面板（`settings.section`，`id:'memoryos'`，`order:120`，label「记忆系统」）
 
-五个页签：**功能开关**（按组分块，每行＝状态徽章＋谁能操作＋谁定的＋成本＋待办步骤＋缺依赖＋操作）、**资料面**（当前管理范围的目录清单＋排除规则与"这条挡了几个"＋固定的文件类型与提示语）、**概览**（统计与两种控制权解释）、**依赖与路径**（探针表＋config 落点）、**账本**（开关账／配置账两张表）。
+六个页签：**功能开关**（按组分块，每行＝状态徽章＋谁能操作＋谁定的＋成本＋待办步骤＋缺依赖＋操作）、**资料面**（当前管理范围的目录清单＋排除规则与"这条挡了几个"＋固定的文件类型与提示语）、**元素库**（`/elements` 懒加载、**只读**：已管理多少个元素／多少条事件〔含待定区〕／链接／快照份数＋元素清单前 40 行＋多点快照索引；写侧仍只在模型工具，面板不另开写入口）、**概览**（统计与两种控制权解释）、**依赖与路径**（探针表＋config 落点）、**账本**（开关账／配置账两张表）。
 
 取数节奏：挂载读一次 ＋ 右上「刷新」＋ 写后吃返回快照；**不轮询、不缓存**。
 
