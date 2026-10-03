@@ -78,8 +78,8 @@ function makeCorpus(dir) {
   ok(F.FEATURES.every((f) => f.cost && f.what && f.label), 'A6 每项都有显示名／做什么／成本三件套')
   ok(F.FEATURES.every((f) => F.GROUPS.includes(f.group)), 'A7 每项都归到已知组')
   // A8 ★ 2026-10-02 与代码对齐（用户令）：**不许在登记表里承诺不存在的能力**
-  ok(!F.featureOf('radar'), 'A8 ★ `radar`（每回合自动指路）**不在登记表**——本包从未实现它，登记＝面板上承诺不存在的能力')
-  ok(!F.featureOf('find'), 'A8b ★ `find`（按需语义寻路）**不在登记表**——同上；要接必须先有描述池/transport/注入式闸（JUDGMENTS §5.6）')
+  ok(!F.featureOf('radar'), 'A8 ★ `radar`（每回合自动指路）**不在登记表**——本包不含它，登记＝面板上承诺不存在的能力')
+  ok(!F.featureOf('find'), 'A8b ★ `find`（按需语义寻路）**不在登记表**——这条路本项目试过（评估后摘除），本包不含实现；要重启必须先做齐 JUDGMENTS §5.6 的前置六件')
   const je = F.featureOf('jev-engine')
   ok(je && /不含寻路|不含语义寻路/.test(je.label + je.what) && !/`find`/.test(je.what),
     'A8c `jev-engine` 只描述"凭据与通道测通"，说明里不指向任何寻路能力（描述与代码对齐）')
@@ -937,7 +937,8 @@ function makeCorpus(dir) {
   ok(/别主动建议|别建议用户开/.test(docs['docs/AGENT-GUIDE.md']) && /别声称/.test(docs['docs/AGENT-GUIDE.md']), 'K8c AGENT-GUIDE 的模型纪律：别建议开 radar、别声称能调 find')
   ok(/已从登记表删除/.test(docs['docs/DESIGN.md']) && /5\.6/.test(docs['docs/DESIGN.md']), 'K8d DESIGN 功能表/术语段写明 find/radar 已删并指向 §5.6')
   ok(/删掉 find \/ radar|不含寻路|不含语义寻路/.test(readFileSync(path.join(PKG, 'cordis.patch.yml'), 'utf8')), 'K8e patch 里对这两键只留"为什么删"的注释，不留键')
-  ok(/不实现、不登记/.test(docs['README.md']) && /JUDGMENTS/.test(docs['README.md']), 'K8f README 状态行写明"不实现、不登记"并给理由入口')
+  ok(/摘除|不实现、不登记|不含该实现/.test(docs['README.md']) && /JUDGMENTS/.test(docs['README.md']),
+    'K8f README 状态行写明 find/radar 的去向（试过→摘除／不实现不登记）并给理由入口')
   // K9 语义能力的"新形态"四处同口径（2026-10-02 用户口径：只提供 jev 工具，可调用、但不是主力）
   ok(/## 5\.6/.test(jm) && /不提供语义能力/.test(jm) && /与代码对齐/.test(jm), 'K9a JUDGMENTS §5.6＝本包不提供语义能力（与代码对齐）')
   ok(/描述池/.test(jm) && /transport/.test(jm) && /门控/.test(jm) && /注入式/.test(jm), 'K9b §5.6 给出"要接 find 的前置五件"（描述池/transport/门控/输出契约/注入式闸）')
