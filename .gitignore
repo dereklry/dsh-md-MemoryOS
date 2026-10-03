@@ -4,3 +4,6 @@ node_modules/
 data/
 dist/
 *.tsbuildinfo
+# Python 内核的编译缓存：不进仓（与上游仓同纪律）
+__pycache__/
+*.pyc
