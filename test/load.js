@@ -313,7 +313,7 @@ function makeCorpus(dir) {
   // 资料面页：函数在、分支在、用的字段必须是快照真给的（点了空白＝最难查的静默失败）
   const sv = (/function Surface\(props\) \{([\s\S]*?)\n\t\t\}/.exec(src) || ['', ''])[1]
   ok(sv.length > 500, 'G14b 资料面页组件成形')
-  ok(/else if \(tab === "surface"\) body = Surface\(/.test(src), 'G14c 页签分支接得上（有组件没分支＝点了没反应）')
+  ok(/else if \(tab === "surface"\) body = e\(Surface,/.test(src), 'G14c 页签分支接得上且用 e() 创建（有组件没分支＝点了没反应；直接调用＝K14 那类崩）')
   const surfaceKeys = ['exts', 'prune', 'roots', 'excludes', 'totals', 'ledger', 'hint']
   const svUnused = surfaceKeys.filter((k) => !new RegExp(`s\\.${k}`).test(sv))
   ok(svUnused.length === 0, `G14d 资料面页把快照给的字段都用上了（没用：${svUnused.join(' ')}）`)
@@ -912,6 +912,17 @@ function makeCorpus(dir) {
   const renderCount = (idx.match(/render:\s*\(/g) || []).length
   ok(!/output:\s*\{\s*schema:\s*'/.test(idx), "K13a output.schema 不得写成字符串（真实内核要求 value schema 对象）")
   ok(outCount > 0 && outCount === renderCount, `K13b 每个工具 output 都带 render（output ${outCount} 处 / render ${renderCount} 处）`)
+
+  // K14 面板：带 hooks 的组件必须用 e() 创建（2026-10-03 由冒烟副本在真浏览器里抓到的第三个真 bug）
+  // 反例＝`body = Surface({...})` 直接调用带 useState 的组件 ⇒ hooks 被记到**父组件**身上，
+  //        切到/切走该页签时 hooks 数量变化 ⇒ React error #310 ⇒ **整块 settings.section entry 崩掉（面板全白）**。
+  // HTTP 面与静态闸都看不见这种崩法，只能靠这条静态禁手。
+  const cl = readFileSync(path.join(PKG, 'client.js'), 'utf8')
+  const hookComps = cl.split(/\n\t\tfunction /).filter((p) => /use(State|Effect|Callback|Memo|Ref)\s*\(/.test(p))
+    .map((p) => (p.match(/^(\w+)\(/) || [])[1]).filter(Boolean)
+  const badCalls = hookComps.filter((n) => new RegExp(`[^\\w.]${n}\\(\\{`).test(cl))
+  ok(hookComps.length > 0 && badCalls.length === 0,
+    `K14 带 hooks 的组件不得被当普通函数调用（组件：${hookComps.join(' ')}｜违规：${badCalls.join(' ') || '无'}）`)
 }
 
 clean()

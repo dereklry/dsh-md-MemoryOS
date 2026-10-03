@@ -404,7 +404,7 @@ window.__ModuleLoader__.load({
 					err ? e("div", { style: ST.note }, err) : null,
 					e("div", { style: ST.meta }, "面板不缓存快照：点右上「刷新」即重读宿主现算状态。"));
 			} else if (tab === "feat") body = Features({ snap: snap, busy: busy, act: act });
-			else if (tab === "surface") body = Surface({ snap: snap, busy: busy, act: act });
+			else if (tab === "surface") body = e(Surface, { snap: snap, busy: busy, act: act });
 			else if (tab === "overview") body = Overview({ snap: snap });
 			else if (tab === "deps") body = Deps({ snap: snap });
 			else body = Ledger({ snap: snap });
