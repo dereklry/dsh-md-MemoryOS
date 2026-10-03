@@ -247,6 +247,10 @@ python/tests/test_kernel_smoke.py  Python 组闸（内核冒烟 6 条：建库/i
 
 **怎么用**：模型侧走 `memoryos_elements`（`ingest`／`timeline`／`snapshot`／`all`／`expire`／`export`）；人在设置面板看到的是 `element-db` 那一行的状态（与其它功能同口径：现算、可降级、缺 Python 只影响这一项）。**面板目前没有元素库页**（只有状态行）——那属"待搬入"，不假装已有。
 
+**抽取的两条通道（设计上有，本包当前只发规则层）**：内核里所有"要模型"的环节都靠**外部注入 client**——LLM 通道用 `DEEPSEEK_API_KEY`（`extract.llm_extract`／`relevance.llm_review`／`decide.llm_decide`／`resolve.llm_resolve`／`profile.llm_triage`／`methods`），Jev 快判通道用 `JEV_API_KEY`（`jev_resolve`／`jev_relevance`／`jev_triage`）。**本包的精简 CLI 不注入 client**（`ingest` 只传 text/source/elements）⇒ **当前全链路零 LLM 调用、零 Key 需求**，`ingest` 返回里的 `llm:false` 就是证据。哪天要接，按 `JUDGMENTS.md` §5.9.5：加**显式开关**（默认关），而不是"有 Key 就自动开"。
+
+**降级不是兜底，是设计**：`ingest()` 抽失败就落规则层并记 `stats.extract_fallback`（真实降级率可查）；`jev.available()` 在"没 Key／被禁用／熔断窗口内"三种情况下都返回 False ⇒ **直接不试**。任何外部通道挂掉都**不许中断入库**。
+
 ---
 
 ## 4. 状态机（派生，不存储）
