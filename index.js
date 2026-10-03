@@ -24,6 +24,7 @@ import { makeKeystore, KEY_REF } from './lib/keystore.js'
 import { foldSurface, appendSurface, surfaceView, effectiveRoots, badRoot, badPattern, preview, MANAGED_EXTS } from './lib/surface.js'
 import { build as buildGraph, load as loadGraph, status as graphStatus, check as graphCheck, checkText, resolveStarts, subgraph, render as renderLight, graphFile, fulltextFallback } from './lib/graph.js'
 import { run as runArchiveGate } from './lib/archive.js'
+import { runKernel, resolvePython, kernelDbFile, KERNEL_DIR } from './lib/kernel.js'
 
 /** 路径归一（账本与提示都用正斜杠、去尾斜杠；只用于比较与显示，不改写用户传入的原样值） */
 const normPath = (p) => String(p || '').trim().replace(/\\/g, '/').replace(/\/+$/, '')
@@ -44,6 +45,9 @@ export function readCfg(config) {
     archiveRepos: (Array.isArray(c.archiveRepos) ? c.archiveRepos : String(c.archiveRepos || envOf('MEMORYOS_ARCHIVE_REPOS') || '').split(/[;,]/)).map((s) => String(s).trim()).filter(Boolean),
     pythonBin: c.pythonBin || envOf('MD_PYTHON_BIN') || '',
     kernelRepo: c.kernelRepo || envOf('MD_REPO_ROOT') || '',
+    // 元素库内核（随包发）的数据根：默认 <dataDir>/elements（与 graph.json 分开两个根）；
+    // 留空＝走默认推导，env MEMORYOS_KERNEL_DATA 同义。
+    kernelData: expandHome(c.kernelData || envOf('MEMORYOS_KERNEL_DATA') || ''),
     // 指针图（本包自建，纯 JS，落 <dataDir>/graph.json）：多久算过期、最多扫多少文件
     graphStaleHours: Number(c.graphStaleHours) > 0 ? Number(c.graphStaleHours) : 24,
     graphMaxFiles: Number(c.graphMaxFiles) > 0 ? Number(c.graphMaxFiles) : 2000,
@@ -66,6 +70,8 @@ export function readCfg(config) {
     home: envOf('DSH_HOME') || join(process.env.USERPROFILE || process.env.HOME || '', '.dsh'),
     // 注入用的 transport（闸/测试可以塞假传输，不联网也跑全链路）
     transport: typeof c.transport === 'function' ? c.transport : undefined,
+    // 注入用的内核调用点（闸/测试塞合成返回，不 spawn 也能测渲染层）
+    kernelCall: typeof c.kernelCall === 'function' ? c.kernelCall : undefined,
   }
 }
 
@@ -510,6 +516,136 @@ export function apply(ctx, config) {
         return { text: r.ok ? r.message : `✗ ${r.message}` }
       } catch (e) {
         return { text: `图操作失败：${String((e && e.message) || e)}` }
+      }
+    },
+  }))
+
+  // ---------------------------------------------------------------- 元素-时间线内核（Python 侧）
+  // 一次调用＝一个子进程（lib/kernel.js）；这里只负责把 argv 拼对、把 JSON 渲染成人话。
+  const kernelCfg = { dataDir: cfg.dataDir, pythonBin: cfg.pythonBin, kernelData: cfg.kernelData }
+  // 内核调用点：默认 spawn Python 子进程；闸（离线）可注入 cfg.kernelCall 提供合成返回，
+  // 这样"JSON → 人话"的渲染层也能被闸覆盖（本轮实测：渲染层猜错过内核返回结构）。
+  const callKernel = (argv, timeoutMs) =>
+    (typeof cfg.kernelCall === 'function' ? cfg.kernelCall : (a, t) => runKernel(kernelCfg, a, { timeoutMs: t }))(argv, timeoutMs || 30000)
+
+  const runElements = async (args) => {
+    const action = String(args.action || 'status')
+    const numArg = (v, d) => (Number(v) > 0 ? String(Number(v)) : String(d))
+    if (action === 'status') {
+      const r = await callKernel(['status'])
+      if (!r.ok) return { ok: false, message: r.message }
+      const d = r.data || {}
+      if (d.ok === false) return { ok: true, message: `元素库还没建（${d.db}）：跑一次 ingest 就会自动建｜内核 ${resolvePython(kernelCfg)}` }
+      const cnt = d.counts || {}
+      return { ok: true, message: `元素库：${cnt.elements ?? 0} 个元素｜${cnt.events ?? 0} 条事件（待定区 ${d.pending ?? 0}）｜${cnt.links ?? 0} 条链接｜${cnt.decisions ?? 0} 条决策\n库 ${d.db}（${(Number(d.bytes || 0) / 1024).toFixed(0)} KB）｜数据根 ${d.data_root}｜内核 ${resolvePython(kernelCfg)}` }
+    }
+    if (action === 'ingest') {
+      const text = String(args.text || '').trim()
+      if (!text) return { ok: false, message: 'ingest 要给 text（要固化进元素库的那段话）' }
+      const argv = ['ingest', '--text', text]
+      if (args.source) argv.push('--source', String(args.source))
+      if (args.elements) argv.push('--elements', String(args.elements))
+      const r = await callKernel(argv, 60000)
+      if (!r.ok) return { ok: false, message: r.message }
+      const d = r.data || {}
+      const def = Array.isArray(d.elements_deferred) && d.elements_deferred.length
+        ? `\n待确认候选（**没落库**，你确认后才建）：${d.elements_deferred.join(' / ')}` : ''
+      return { ok: true, message: `入库完成：新增元素 ${d.elements_new ?? 0}｜事件 ${d.events_new ?? 0}｜链接 ${d.links_new ?? 0}（抽取＝${d.llm ? 'LLM' : '规则层'}）${def}` }
+    }
+    if (action === 'timeline' || action === 'snapshot') {
+      const el = String(args.element || '').trim()
+      if (!el) return { ok: false, message: `${action} 要给 element（元素名或代码）` }
+      const argv = [action, el]
+      if (action === 'timeline') {
+        if (args.since) argv.push('--since', String(args.since))
+        argv.push('--limit', numArg(args.limit, 200))
+      }
+      const r = await callKernel(argv)
+      if (!r.ok) return { ok: false, message: r.message }
+      const d = r.data || {}
+      // 内核两种形状：timeline() 带 found；snapshot() 不带（找到才有 element 字段）—— 这里统一判定。
+      const found = d.found === undefined ? !!d.element : d.found
+      if (!found) {
+        return { ok: true, message: `元素库里没有「${el}」。先用 memoryos_elements(action='ingest') 把带它的话固化进来，或 action='all' 看库里都有谁。` }
+      }
+      const aliases = Array.isArray(d.aliases) && d.aliases.length ? `，别名 ${d.aliases.join(' / ')}` : ''
+      const head = `元素「${d.element}」（id ${d.id ?? d.element_id}${d.category && d.category !== 'generic' ? `，${d.category}` : ''}${aliases}）`
+      const evs = Array.isArray(d.events) ? d.events : []
+      const line = (e) => `- ${e.ts || '（无时间·待定区）'}｜${e.status === 'expired' ? '已失效｜' : ''}${e.content}${e.source ? `（${e.source}）` : ''}`
+      if (action === 'snapshot') {
+        // db.snapshot() 的真实形状：{element_id, latest, active_count}（不是 events 数组）
+        const latest = d.latest || null
+        const cnt = d.active_count ?? 0
+        return { ok: true, message: `${head}\n活跃事件 ${cnt} 条${latest ? `｜最近一条：\n${line(latest)}` : '（还没有活跃事件）'}` }
+      }
+      const links = Array.isArray(d.links) && d.links.length
+        ? `\n关联边：${d.links.map((l) => `${l.relation || 'related'}→${l.to_name || l.to || l.to_id}（${l.method || ''}）`).join(' / ')}` : ''
+      return { ok: true, message: `${head}｜${evs.length} 条事件${args.since ? `（since ${args.since}）` : ''}\n${evs.map(line).join('\n') || '（这段时间内没有事件）'}${links}` }
+    }
+    if (action === 'all') {
+      const argv = ['all']
+      if (args.since) argv.push('--since', String(args.since))
+      const r = await callKernel(argv)
+      if (!r.ok) return { ok: false, message: r.message }
+      const list = Array.isArray(r.data) ? r.data : []
+      if (!list.length) return { ok: true, message: "元素库还是空的：用 action='ingest' 把带元素线索（6 位代码，或 --elements 显式给已知元素）的话固化进来。" }
+      const rows = list.slice(0, 40).map((x) => {
+        const nm = x.element || x.name || '?'
+        const evs = Array.isArray(x.events) ? x.events : []
+        const last = evs.map((e) => e.ts).filter(Boolean).sort().pop() || ''
+        return `- ${nm}（${evs.length} 条事件${last ? `，最近 ${last}` : ''}）`
+      })
+      return { ok: true, message: `元素库共 ${list.length} 个元素${list.length > 40 ? '（只列前 40）' : ''}：\n${rows.join('\n')}` }
+    }
+    if (action === 'expire') {
+      const el = String(args.element || '').trim()
+      const frag = String(args.fragment || '').trim()
+      if (!el || !frag) return { ok: false, message: 'expire 要同时给 element 与 fragment（按内容片段标失效，不删历史）' }
+      const r = await callKernel(['expire', el, frag])
+      if (!r.ok) return { ok: false, message: r.message }
+      return { ok: true, message: `已按片段标失效：${JSON.stringify(r.data)}` }
+    }
+    if (action === 'export') {
+      const p = String(args.path || '').trim()
+      const target = p || join(cfg.kernelData || join(cfg.dataDir, 'elements'), 'timeline-export.md')
+      const r = await callKernel(['export', target], 60000)
+      if (!r.ok) return { ok: false, message: r.message }
+      return { ok: true, message: `已导出 Markdown 镜像：${(r.data && r.data.path) || target}` }
+    }
+    return { ok: false, message: `未知动作：${action}（可用 status | ingest | timeline | snapshot | all | expire | export）` }
+  }
+
+  reg(defineTool({
+    name: 'memoryos_elements',
+    description:
+      'MemoryOS 的**元素库**（元素-时间线内核，随包发的本地 SQLite）：把聊到/写下的**元素 + 带时间戳的事件 + 关联边**固化下来，之后能按元素拉时间线、看快照、标失效、导出 Markdown 镜像。'
+      + '动作：`status`（库规模与落点）｜`ingest`（要 text；把一段话抽成元素+事件入库）｜`timeline`（要 element；某元素按时间的多股绳）｜`snapshot`（要 element；最近状态）｜`all`（库里都有谁）｜`expire`（element+fragment；按内容片段标失效，不删历史）｜`export`（导出 md 镜像）。'
+      + '**抽取有元素线索才落库**：文本里带 6 位代码，或用 `elements` 显式给已知元素（如 "沪深300ETF,510300"）——这是上游内核的保守模式，宁可少建也不制造碎片元素；真正的未知新元素会作为**待确认候选**返回（`elements_deferred`），你确认后才建。'
+      + '**无 API Key 也能用**：规则层解析时间（ISO/中日韩日期/今天昨天/相对天数）与元素线索；有 Key 时才走 LLM 精抽，失败自动降级（结果里会写"抽取＝规则层"）。'
+      + '**事件铁律**：没有时间属性的事件落 `ts=""` 进**待定区**（status=pending），不伪造时间；历史只追加、失效用标记不删除。'
+      + '库落 `<数据根>/elements/memory.db`（与指针图分开两个数据根）；python 找不到时**只这一个工具不可用**，面板与词法检索照常。'
+      + '它管的是**结构化事实**（谁在什么时候做了什么）；"这件事该读哪份 md"仍走 memoryos_graph 的词法落点——两者不是一回事，别互相替代。',
+    parameters: {
+      action: { type: 'string', required: true, description: 'status | ingest | timeline | snapshot | all | expire | export' },
+      text: { type: 'string', description: '仅 ingest：要固化进元素库的那段话' },
+      source: { type: 'string', description: '仅 ingest：来源标注（如对话/文件名，便于回溯）' },
+      elements: { type: 'string', description: '仅 ingest：已知元素，逗号分隔（给了它就走保守模式：不新建元素，未知名挂到主元素）' },
+      element: { type: 'string', description: '仅 timeline/snapshot/expire：元素名或代码' },
+      since: { type: 'string', description: '仅 timeline/all：只看该日期（YYYY-MM-DD）之后' },
+      limit: { type: 'number', description: '仅 timeline：最多几条（默认 200）' },
+      fragment: { type: 'string', description: '仅 expire：要标失效的内容片段' },
+      path: { type: 'string', description: '仅 export：导出文件路径（默认 <数据根>/elements/timeline-export.md）' },
+    },
+    output: {
+      schema: { type: 'object', additionalProperties: false, properties: { text: { type: 'string' } } },
+      render: (args, value) => [{ type: 'text', text: value.text }],
+    },
+    async execute(args) {
+      try {
+        const r = await runElements(args)
+        return { text: r.ok ? r.message : `✗ ${r.message}` }
+      } catch (e) {
+        return { text: `元素库操作失败：${String((e && e.message) || e)}` }
       }
     },
   }))

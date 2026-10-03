@@ -19,6 +19,7 @@
 | `jev-engine` | llm | **live** | **只管凭据与通道测通**：存/取 Key（优先宿主凭据面）+ 真发一次极小请求测通 + 记进配置账本。**不含寻路**（2026-10-02 与代码对齐） |
 | `surface-admin` | user | **live** | 资料面管理：看/改管理范围（只数文件名，不读内容） |
 | `graph-search` | both | **live** | 指针图：建图／`light` 落点（含零命中正文兜底）／`check` 体检（纯本地零账，秒级） |
+| `element-db` | both | **live** | 元素库（元素-时间线内核）：内核**随包发**（`python/memoryos_kernel`，读面纯标准库），落本地 SQLite（元素·事件·链接·决策）；无 Key 也能用规则层抽取；**缺 python 只降级这一个功能**（`DEPS.python` 非致命） |
 | `scaffold` | user | todo | 首次建档（四层骨架 + 资料表初稿） |
 | `mining` | llm | todo | 候选生成（查空的词→别名、反复读的→资料行） |
 | `maintain` | user | todo | 定时维护（build + check → 候选队列） |
@@ -324,8 +325,9 @@ test/stub-dsh-tools.mjs  宿主 dsh-tools 的恒等替身（让闸不依赖 DSH 
 | `dataDir` | `MEMORYOS_DATA` | 两本账落点（默认 `~/.dsh/memoryos`） |
 | `memoryRoot` | `MD_MEMORY_ROOTS` | 记忆根，`;` 或 `,` 分隔多个 |
 | `archiveRepos` | `MEMORYOS_ARCHIVE_REPOS` | 归档闸看哪些 git 仓（默认＝生效记忆根各自所属的仓，自动向上找 `.git`；记忆根不在仓里时在这里显式给） |
-| `pythonBin` | `MD_PYTHON_BIN` | 内核解释器（读面纯标准库，系统 Python 即可） |
-| `kernelRepo` | `MD_REPO_ROOT` | `pythonBin` 的发现基准 |
+| `pythonBin` | `MD_PYTHON_BIN` / `MEMORYOS_PYTHON_BIN` | 元素库内核的解释器（内核随包发，读面纯标准库，系统 Python 3.9+ 即可；**缺了只降级元素库这一个功能**） |
+| `kernelRepo` | `MD_REPO_ROOT` | 兼容上游叫法：内核仓基准（本包内核随包发，一般不用配） |
+| `kernelData` | `MEMORYOS_KERNEL_DATA` | 元素库内核的数据根（默认 `<dataDir>/elements`——**与指针图分两个根**，见 DESIGN §3.6） |
 | `graphMaxFiles` | — | 建图最多扫多少份文件（默认 2000；命中会标"图不完整"） |
 | `graphMaxBytes` | — | 单份文件超过多少字节就跳过（**默认 8MB**，与内核 `MD_MAX_FILE_BYTES` 同口径；防一份巨型日志拖垮建图，被跳过的会在零命中兜底里如实点名） |
 | `graphStaleHours` | — | 图水位超过几小时算"该重建"（默认 24；另有 changed 文件数也会判过期） |
@@ -340,6 +342,7 @@ test/stub-dsh-tools.mjs  宿主 dsh-tools 的恒等替身（让闸不依赖 DSH 
 | `allowKeyInRepo` | — | 允许把 Key 写进 git 工作树（默认 **false**，见 §8） |
 | `defaults` | — | 各功能出厂默认（例：`{ "graph-search": true, "jev-engine": false, … }`——键名＝登记表里存在的功能；**登记表外的键在这里写了也不算数**），低于账本 |
 | `transport` | — | 测试注入点：替换测通的 HTTP 传输（闸因此全程不联网） |
+| `kernelCall` | — | 测试注入点：替换元素库的内核调用（闸用合成返回覆盖"JSON → 人话"的渲染层，不 spawn Python） |
 
 ---
 

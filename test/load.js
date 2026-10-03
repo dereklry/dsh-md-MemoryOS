@@ -97,7 +97,8 @@ function makeCorpus(dir) {
   const r = P.probeAll(bundle)
   ok(typeof r.webserver === 'string' && /headless|未提供/.test(r.webserver), 'B4 没有 webServer 时探针直说（不装作正常）')
   ok(r['memory-root'] === true, 'B5 记忆根真实存在 ⇒ 探针 true')
-  ok(typeof r.python === 'string' && /pythonBin/.test(r.python), 'B6 找不到 python 时给的是"去哪改"的人话')
+  const badPy = P.probeAll(P.makeProbes({ memoryRoots: [tmp], pythonBin: path.join(tmp, 'no-such-python.exe'), keyFile: '', dataDir: tmp }, { webserver: false }))
+  ok(typeof badPy.python === 'string' && /pythonBin/.test(badPy.python), 'B6 配了不存在的 pythonBin ⇒ 给"去哪改"的人话（合成输入，不依赖机器环境）')
   const sp = P.stepAll(bundle)
   ok(sp['jev-probe'] && sp['jev-probe'].done === false && /memoryos_setup/.test(sp['jev-probe'].why), 'B7 没测通过 ⇒ 步骤未满足，且提示模型该跑哪个动作')
 }
@@ -139,7 +140,9 @@ function makeCorpus(dir) {
   ok(st(f({ steps: ['jev-key'] }), { value: false }, full, noStep).state === 'off', 'D2 关着就是 off（不去报依赖）')
   ok(st(f({ steps: ['jev-key', 'jev-probe'] }), {}, full, noStep).state === 'waiting', 'D3 ★开着但前置步骤没做完 ⇒ waiting（**配置型功能绝不能显示成"生效中"**）')
   ok(st(f({ steps: ['jev-key'] }), {}, full, noStep).pending.length === 1 && st(f({ steps: ['jev-key'] }), {}, full, noStep).pending[0].by === 'user', 'D4 待办要说清"这一步该谁做"（Key 只能用户给）')
-  ok(st(f({ deps: ['python'] }), {}, Object.assign({}, full, { python: '没找到' }), allStep).state === 'unavailable', 'D5 缺硬依赖 ⇒ unavailable')
+  ok(st(f({ deps: ['memory-root'] }), {}, Object.assign({}, full, { 'memory-root': '没找到' }), allStep).state === 'unavailable', 'D5 缺硬依赖 ⇒ unavailable')
+  ok(st(f({ deps: ['python'] }), {}, Object.assign({}, full, { python: '没确认到 python' }), allStep).state === 'degraded',
+    'D5b python 是**非致命**依赖 ⇒ 缺了只降级（元素库单独不可用，面板与词法检索照常）')
   ok(st(f({ deps: ['graph-db'] }), {}, Object.assign({}, full, { 'graph-db': '水位过期' }), allStep).state === 'degraded', 'D6 缺可降级依赖 ⇒ degraded（仍可用，但要看得见打折）')
   ok(st(f({ steps: ['jev-probe'], deps: ['python'] }), {}, Object.assign({}, full, { python: '没找到' }), noStep).state === 'waiting', 'D7 步骤未完成排在依赖缺失之前（先说"还差动作"，更有指导性）')
   ok(st(f({ deps: ['python', 'webserver'] }), {}, { python: 'a', webserver: 'b' }, allStep).missing.length === 2, 'D8 缺哪些依赖要全列出')
@@ -164,10 +167,22 @@ function makeCorpus(dir) {
   const SECRET = 'sk-secret-1234567890abcdef'
   let probeCalls = 0
   const transport = async () => { probeCalls++; return { status: 200, text: JSON.stringify({ answers: { probe: { choice: 'big', confidence: 0.98 } } }) } }
-  const disposer = H.apply(ctx, { dataDir, memoryRoot: tmp, transport, llmCanSwitch: true, modelCanSaveKey: true })
+  // 元素库内核：注入合成返回（闸**不 spawn Python**），用来覆盖"JSON → 人话"的渲染层。
+  // 形状照内核真实返回：db.snapshot()＝{element_id, latest, active_count}（**没有** found/events）——
+  // 本轮真机上就因为渲染层猜成 {found, events} 而误报"元素库里没有这个元素"。
+  const fakeKernel = (argv) => {
+    const a = argv[0]
+    if (a === 'status') return Promise.resolve({ ok: true, data: { ok: true, db: 'X/memory.db', bytes: 4096, counts: { elements: 2, events: 3, links: 1, decisions: 0 }, pending: 1, data_root: 'X' } })
+    if (a === 'snapshot') return Promise.resolve({ ok: true, data: { element_id: 1, latest: { ts: '2026-10-01', content: '买入 510300', source: 'S', status: 'active' }, active_count: 3, element: '510300', category: 'generic', aliases: [], tags: '[]', links: [] } })
+    if (a === 'timeline') return Promise.resolve({ ok: true, data: { element: '510300', id: 1, category: 'generic', aliases: [], found: true, events: [{ ts: '2026-10-01', content: '买入 510300', source: 'S', status: 'active' }], links: [] } })
+    if (a === 'ingest') return Promise.resolve({ ok: true, data: { elements_new: 1, events_new: 1, links_new: 0, llm: false, elements_deferred: ['某新概念'] } })
+    if (a === 'all') return Promise.resolve({ ok: true, data: [{ element: '510300', id: 1, events: [{ ts: '2026-10-01' }] }] })
+    return Promise.resolve({ ok: true, data: null })
+  }
+  const disposer = H.apply(ctx, { dataDir, memoryRoot: tmp, transport, kernelCall: fakeKernel, llmCanSwitch: true, modelCanSaveKey: true })
 
   ok(typeof disposer === 'function', 'E1 apply 返回可释放函数（返数组会被 web 组合判 Invalid effect）')
-  ok(regs.length === 5 && regs.map((t) => t.name).join(',') === 'memoryos_status,memoryos_switch,memoryos_setup,memoryos_surface,memoryos_graph', 'E2 五工具：状态／切开关／配置动作／资料面／指针图')
+  ok(regs.length === 6 && regs.map((t) => t.name).join(',') === 'memoryos_status,memoryos_switch,memoryos_setup,memoryos_surface,memoryos_graph,memoryos_elements', 'E2 六工具：状态／切开关／配置动作／资料面／指针图／元素库')
   ok(logs.some((l) => /就位/.test(l)) && !logs.some((l) => l.startsWith('W:')), 'E3 装载留一行日志且自检零告警（登记表／探针同源／路由对账三查）')
   ok(child.length === 1 && typeof child[0] === 'function', 'E4 webServer 走 ctx.inject 延迟挂载（顶层 inject 会让 headless 整个插件永挂）')
   ok(routes.some((r) => r.kind === 'prefix' && r.path === A.PREFIX), 'E5 有 prefix 兜底（未知子路径必须回 JSON 404，不能掉进 SPA 回落返回 HTML）')
@@ -283,6 +298,22 @@ function makeCorpus(dir) {
   disposer(); child.forEach((fz) => fz && fz())
   ok(regs.every((t) => t.__off) && routes.every((r) => r.__off), 'E24 disposer 释放工具与全部路由（卸载可逆）')
   ok(probeCalls === 1, 'E25 测通只发了一次（无隐藏的每回合重试）')
+
+  // —— 元素库渲染层（注入合成返回，**不 spawn Python**）：本轮真机上踩过"渲染层猜错内核结构 ⇒ 误报没有该元素"
+  const elTool = regs.find((t) => t.name === 'memoryos_elements')
+  const elSnap = await elTool.execute({ action: 'snapshot', element: '510300' })
+  ok(/最近一条/.test(elSnap.text) && !/元素库里没有/.test(elSnap.text),
+    'E26 元素库 snapshot 按内核真实形状渲染（{latest,active_count}）——不误报"没有这个元素"')
+  const elTl = await elTool.execute({ action: 'timeline', element: '510300' })
+  ok(/2026-10-01/.test(elTl.text) && /买入 510300/.test(elTl.text), 'E27 元素库 timeline 渲染出事件与时间戳')
+  const elIng = await elTool.execute({ action: 'ingest', text: '某段话' })
+  ok(/待确认候选/.test(elIng.text) && /某新概念/.test(elIng.text), 'E28 元素库 ingest 如实报"没落库的待确认候选"')
+  const elSt = await elTool.execute({ action: 'status' })
+  ok(/2 个元素/.test(elSt.text) && /待定区 1/.test(elSt.text), 'E29 元素库 status 渲染库规模与待定区')
+  const elAll = await elTool.execute({ action: 'all' })
+  ok(/共 1 个元素/.test(elAll.text), 'E30 元素库 all 列出元素清单')
+  const elBad = await elTool.execute({ action: 'nope' })
+  ok(/未知动作/.test(elBad.text), 'E31 元素库未知动作给人话（含可用清单）')
 }
 // ————————————————————————————————— G 面板装载契约与静态禁手
 {
@@ -565,7 +596,7 @@ function makeCorpus(dir) {
   ok(/"step":"graph-built"/.test(setupN) && /"by":"user"/.test(setupN) && /节点/.test(setupN),
     'N5 建图这一步进了配置账（谁建的、规模多大，事后可查）')
   const gTool = regsN.find((t) => t.name === 'memoryos_graph')
-  ok(!!gTool, 'N6 第五个工具 memoryos_graph 已注册（工具表判据）')
+  ok(!!gTool, 'N6 指针图工具 memoryos_graph 已注册（工具表判据）')
   const ls = await gTool.execute({ action: 'status' })
   ok(/指针图/.test(ls.text) && /节点/.test(ls.text), `N7 status 动作给人话（${ls.text.slice(0, 40)}…）`)
   const li = await gTool.execute({ action: 'light', query: 'AA1' })
@@ -800,9 +831,10 @@ function makeCorpus(dir) {
   // 真实工具名从代码里抽（手抄清单自己就会漂移——本轮 K2 当场抓到这件事）
   const realTools = new Set([...idx.matchAll(/name: '(memoryos_[a-z]+)'/g)].map((m) => m[1]))
   const named = new Set((all.match(/memoryos_[a-z-]+/g) || []).map((s) => s.replace(/-+$/, '')))
+  named.delete('memoryos_kernel')   // 随包发的 Python 包名，不是宿主工具（别当成幽灵工具）
   const ghost = [...named].filter((x) => !realTools.has(x))
-  ok(realTools.size === 5 && [...realTools].sort().join(',') === 'memoryos_graph,memoryos_setup,memoryos_status,memoryos_surface,memoryos_switch',
-    `K2a 代码注册的工具正好五个（抽到 ${realTools.size}：${[...realTools].sort().join(' ')}）——加第六个工具没同步文档就拦在这里`)
+  ok(realTools.size === 6 && [...realTools].sort().join(',') === 'memoryos_elements,memoryos_graph,memoryos_setup,memoryos_status,memoryos_surface,memoryos_switch',
+    `K2a 代码注册的工具正好六个（抽到 ${realTools.size}：${[...realTools].sort().join(' ')}）——加第七个工具没同步文档就拦在这里`)
   ok(ghost.length === 0, `K2b 文档提到的工具都真实存在（幽灵：${ghost.join(' ')}）`)
 
   // K3 setup 的 action 名与代码分支同源

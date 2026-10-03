@@ -28,6 +28,7 @@
 | `memoryos_setup` | 配置型功能的准备动作 | `action:'probe'|'save-key'|'where-key'|'list'`、`reason`（必填）、`feature?`、`key?`、`path?`、`allow_in_repo?` |
 | `memoryos_graph` | 建图、按词查**落点**（哪条目/哪文件/哪行）、体检、**提交前归档闸** | `action:'status'|'build'|'light'|'check'|'archive-check'`、`query?`、`expand?`、`depth?`、`max_nodes?`、`reason?`、`file?`、`no_refresh?` |
 | `memoryos_surface` | 看或改**资料面**（哪些目录归 OS 管、排掉哪些子目录与文件） | `action:'list'|'add-root'|'drop-root'|'add-exclude'|'drop-exclude'|'preview'`、`path?`、`pattern?`、`reason`（写操作必填） |
+| `memoryos_elements` | **元素库**（元素-时间线内核，本地 SQLite）：把一段话抽成"元素＋**带时间戳事件**"入库、按元素拉时间线／快照、标失效、导出 md 镜像 | `action:'status'|'ingest'|'timeline'|'snapshot'|'all'|'expire'|'export'`、`text?`、`element?`、`elements?`、`source?`、`since?`、`limit?`、`fragment?`、`path?` |
 
 读 `memoryos_status` 的典型输出（每行一功能）：
 
@@ -141,6 +142,7 @@
 ```
 MemoryOS：功能状态一律以 memoryos_status 为准（现算，别引用记忆里的旧状态）。资料面（管到哪些目录／排掉哪些文件）用 memoryos_surface：先 list 再看，加排除前必须 preview；profile 基线删不掉、类型固定 .md 不许承诺扩展。
 指针图用 memoryos_graph：改了资料面或新写归档 md 就 build；light 默认只给落点（哪条目/哪文件/哪行，不是内容），命中级别（精准／变体）照原话转述，要地图才加 `expand:true`；收尾跑一次 check 报盲区；**准备 git commit 前跑一次 archive-check**（只看本次新增：新档没人引用／回指条目号悬空 ⇒ warn，只报事实不改文件，豁免写法 `> 归档：免索引（理由）`）。
+元素库用 memoryos_elements：聊到/写下的元素与**带时间戳事件**用 `ingest` 固化（文本里要有 6 位代码，或显式给 `elements`——未知新概念会作为**待确认候选**返回，**别自己建**）；问"某元素过去发生过什么"用 `timeline`／`snapshot`；**没有 API Key 时走规则层**，照实说"抽取＝规则层"，别讲成"AI 抽取的"。它管**结构化事实**，与"这件事该读哪份 md"（走 memoryos_graph）不是一回事。
 文件头契约：专档开头写 `> 档位：叶子 ｜ 指针条目=AAx`（叶子默认；中枢＝指路文件）；条目写成 `### AA17 <情形>：<动作>` ＋ `- **触发**：` 一行（用户会怎么说）。
 只有登记为「由模型执行/双方可切」且未被用户接管的项你能切，且必须写中文 reason。
 配置型功能（如 jev-engine）不要拨开关：先 where-key → save-key(仅用户明确委托时) → probe 测通 → 才 switch on；
