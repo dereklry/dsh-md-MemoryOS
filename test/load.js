@@ -186,6 +186,20 @@ function makeCorpus(dir) {
     if (a === 'ingest') return Promise.resolve({ ok: true, data: { elements_new: 1, events_new: 1, links_new: 0, llm: false, elements_deferred: ['某新概念'] } })
     if (a === 'all') return Promise.resolve({ ok: true, data: [{ element: '510300', id: 1, events: [{ ts: '2026-10-01' }] }] })
     if (a === 'import') return Promise.resolve({ ok: true, data: { element: '某交易逻辑', parsed: 3, new: 2 } })
+    if (a === 'tree') {
+      if (argv[1]) {
+        return Promise.resolve({ ok: true, data: { found: true, element: '510300', depth: 1, parents: [], tree: [{ id: 1, name: '510300', category: 'generic', depth: 1, events: 2 }, { id: 2, name: '沪深300ETF', category: 'topic', depth: 2, events: 1 }] } })
+      }
+      return Promise.resolve({ ok: true, data: [{ name: '510300', category: 'generic', depth: 1, parents: [], children: ['沪深300ETF'] }, { name: '沪深300ETF', category: 'topic', depth: 2, parents: ['510300'], children: [] }] })
+    }
+    if (a === 'merge') {
+      if (!argv.includes('--confirm')) {
+        return Promise.resolve({ ok: true, data: { ok: false, dry_run: true, note: '预演：把「沪深300ETF」并入「510300」（事件重挂／别名归并／链接归并／产出物／子树）；要真写请加 --confirm' } })
+      }
+      return Promise.resolve({ ok: true, data: { events: 0, aliases: 1, links: 0, artifacts: 0, children: 0, parents: 0 } })
+    }
+    if (a === 'recall') return Promise.resolve({ ok: true, data: { query: 'q', mode: 'quick', llm_used: false, jev_used: false, ambiguous: [], results: [{ id: 2, name: '沪深300ETF', category: 'topic', score: 0.2667, hard: 0.2667, llm: null, components: { text_sim: 0.5, link_hops: null, link_s: 0, co_occur: 0.3333, cat_tag: 0 } }] } })
+    if (a === 'decide') return Promise.resolve({ ok: true, data: { decision_id: 7, query: 'q', mode: 'quick', as_of: '', llm_decision: null, ambiguous: [], triage: null, profile: null, decision_package: '## 决策包（两级召回）\n\n**问题**：q\n\n### 线条轮廓\n1. 510300', elements_used: [{ name: '510300', level: 'full' }] } })
     return Promise.resolve({ ok: true, data: null })
   }
   const disposer = H.apply(ctx, { dataDir, memoryRoot: tmp, transport, kernelCall: fakeKernel, llmCanSwitch: true, modelCanSaveKey: true })
@@ -346,6 +360,20 @@ function makeCorpus(dir) {
     'E35 元素库 context 取最新快照并附"自快照以来新增"（提及时＝当前运行逻辑）')
   const elSaveBad = await elTool.execute({ action: 'save' })
   ok(/要给 element/.test(elSaveBad.text), 'E36 save 缺 element 给人话')
+  const elTree = await elTool.execute({ action: 'tree' })
+  ok(/元素树概览/.test(elTree.text) && /510300/.test(elTree.text) && /1 个子/.test(elTree.text), 'E40 元素库 tree 渲染全库概览（含子数与父）')
+  const elTree1 = await elTool.execute({ action: 'tree', element: '510300' })
+  ok(/的树（含自身与子元素）/.test(elTree1.text) && /沪深300ETF/.test(elTree1.text), 'E41 tree <元素> 渲染树与子元素')
+  const elMerge0 = await elTool.execute({ action: 'merge', from: '沪深300ETF', to: '510300' })
+  ok(/预演/.test(elMerge0.text) && /什么都没改/.test(elMerge0.text), 'E42 merge 不给 confirm ⇒ 只预演、并明说没改库')
+  const elMerge1 = await elTool.execute({ action: 'merge', from: '沪深300ETF', to: '510300', confirm: true })
+  ok(/已合并/.test(elMerge1.text) && /别名归并 1/.test(elMerge1.text) && /append-only/.test(elMerge1.text), 'E43 merge 真写渲染各计数并声明 append-only（事件不删只重挂）')
+  const elRecall = await elTool.execute({ action: 'recall', query: '观察仓' })
+  ok(/按关联度召回/.test(elRecall.text) && /沪深300ETF/.test(elRecall.text) && /材料不是结论/.test(elRecall.text), 'E44 recall 渲染候选与分解分，并声明"材料不是结论"')
+  const elRecall0 = await elTool.execute({ action: 'recall' })
+  ok(/别把要找的元素名也写进去/.test(elRecall0.text), 'E45 recall 缺 query 给人话（含"别写要找的元素名"这条口径）')
+  const elDecide = await elTool.execute({ action: 'decide', query: '该不该加仓' })
+  ok(/决策流水线/.test(elDecide.text) && /决策材料/.test(elDecide.text) && /决策包/.test(elDecide.text), 'E46 decide 在无 LLM 时渲染"材料"并说明分工口径')
 }
 // ————————————————————————————————— G 面板装载契约与静态禁手
 {
@@ -887,8 +915,10 @@ function makeCorpus(dir) {
   const badAct = [...mentioned].filter((a) => !realActions.has(a))
   ok(badAct.length === 0, `K3b 文档写的 action 代码里都有（多余：${badAct.join(' ')}）`)
 
-  // K4 配置键：只查 §7 那张表（早先扫全文，把 §3/§4 的账本字段、状态字段误当配置键——本轮实踩）
-  const cfgKeys = new Set((idx.match(/c\.([A-Za-z]+)/g) || []).map((s) => s.slice(2)))
+  // K4 配置键：**只扫 readCfg 的函数体**。早先扫全文，会把别处的局部变量 `c.xxx` 也当成配置键
+  //（本轮与上一轮各踩一次：`const c = d.counts` 与 `const c = x.components`）——判据要跟着代码结构走。
+  const readCfgBody = (/export function readCfg\([\s\S]*?\n\}/.exec(idx) || [''])[0]
+  const cfgKeys = new Set((readCfgBody.match(/c\.([A-Za-z]+)/g) || []).map((s) => s.slice(2)))
   const sec7 = (/^## 7\.[\s\S]*?(?=^## 8\.)/m.exec(docs['docs/DESIGN.md']) || [''])[0]
   const listed = [...new Set(sec7.split(/\r?\n/)
     .filter((l) => /^\|/.test(l) && !/^\|\s*-/.test(l))

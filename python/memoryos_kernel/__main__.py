@@ -1,7 +1,8 @@
 """memoryos_kernel.__main__ — 共享包内的精简 CLI（只覆盖元素-时间线主线）。
 
 与上游内核的 cli.py（2472 行、混编台账命令）刻意分开：这里只做**薄封装**，
-命令集＝ init / ingest / import / timeline / snapshot / save / index / context / all / expire / export / status。
+命令集＝ init / ingest / import / timeline / snapshot / save / index / context / all / expire / export /
+          tree / merge / recall / decide / status。
 JS 侧（lib/kernel.js）就是 spawn 这个入口，一命令一次调用。
 
 用法：
@@ -97,6 +98,23 @@ def main(argv=None) -> int:
     pim.add_argument("--path", required=True, help="要导入的 .md 路径")
     pim.add_argument("--source", default="")
     pim.add_argument("--category", default="generic", help="元素不存在时新建的类别（默认 generic；上游原为写死 stock）")
+    ptr = sub.add_parser("tree", help="元素树与归宿（多父多子 DAG；不带 element＝全库概览）")
+    ptr.add_argument("element", nargs="?", default="")
+    ptr.add_argument("--depth", type=int, default=3)
+    pmg = sub.add_parser("merge", help="碎片元素合并（事件重挂/别名归并/链接归并/产出物/子树；不给 --confirm 只预演）")
+    pmg.add_argument("--from", dest="src", required=True, help="要被并入的碎片元素")
+    pmg.add_argument("--to", dest="dst", required=True, help="规范元素（保留者）")
+    pmg.add_argument("--no-alias", action="store_true", help="不把 from 的名字留作 to 的别名（默认保留）")
+    pmg.add_argument("--confirm", action="store_true", help="真写；不给则只做预演")
+    prc = sub.add_parser("recall", help="按关联度召回（纯硬信号，无 LLM/无 Key 可用）")
+    prc.add_argument("query")
+    prc.add_argument("--top", type=int, default=10)
+    pdc = sub.add_parser("decide", help="决策流水线：quick＝轮廓包（材料）；full＝有 LLM/Jev 时加精评")
+    pdc.add_argument("query")
+    pdc.add_argument("--mode", default="quick", choices=["quick", "full"])
+    pdc.add_argument("--top", type=int, default=8)
+    pdc.add_argument("--as-of", default="")
+    pdc.add_argument("--show-profile", action="store_true")
     sub.add_parser("status", help="库统计（元素/事件/链接/决策）")
 
     a = ap.parse_args(argv)
@@ -134,6 +152,49 @@ def main(argv=None) -> int:
         return 0
     if a.cmd == "expire":
         _out(ktl.expire(db, a.element, a.fragment))
+        return 0
+    if a.cmd == "tree":
+        if a.element:
+            el = db.find_element(a.element)
+            if not el:
+                _out({"found": False, "element": a.element, "note": "元素库里没有它"})
+                return 0
+            _out({"found": True, "element": el["name"], "depth": el["depth"],
+                  "parents": db.parents_of(el["id"]), "tree": db.element_tree(el["id"], max_depth=a.depth)})
+        else:
+            rows = []
+            for el in db.all_elements():
+                rows.append({"name": el["name"], "category": el["category"], "depth": el["depth"],
+                             "parents": [p["name"] for p in db.parents_of(el["id"])],
+                             "children": [k["name"] for k in db.element_children(el["id"])]})
+            _out(rows)
+        return 0
+    if a.cmd == "merge":
+        src, dst = db.find_element(a.src), db.find_element(a.dst)
+        if not src or not dst:
+            _out({"ok": False, "note": f"元素不存在：{'--from' if not src else '--to'}"})
+            return 0
+        if src["id"] == dst["id"]:
+            _out({"ok": False, "note": "--from 与 --to 是同一个元素"})
+            return 0
+        if not a.confirm:
+            _out({"ok": False, "dry_run": True,
+                  "note": f"预演：把「{src['name']}」并入「{dst['name']}」（事件重挂／别名归并／链接归并／产出物／子树）；"
+                          f"要真写请加 --confirm（append-only：事件不删，只重挂）"})
+            return 0
+        _out(db.merge_elements(src["id"], dst["id"], keep_alias=not a.no_alias))
+        return 0
+    if a.cmd == "recall":
+        from . import relevance as krel                       # 延迟 import：避开与 decide 的循环依赖
+        from .decide import _identify_elements
+        ids, amb = _identify_elements(db, a.query, "", None)  # 无 client：词法消解，歧义如实返回
+        res = krel.rank(db, a.query, ids, client=None, mode="quick", top_n=a.top)
+        res["ambiguous"] = amb
+        _out(res)
+        return 0
+    if a.cmd == "decide":
+        from . import decide as kdec
+        _out(kdec.decide(db, a.query, client=None, mode=a.mode, top_n=a.top, as_of=a.as_of, show_profile=a.show_profile))
         return 0
     if a.cmd == "export":
         _out({"ok": True, "path": ktl.export_md(db, a.path)})

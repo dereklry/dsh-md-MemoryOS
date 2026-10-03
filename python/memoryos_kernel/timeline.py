@@ -157,7 +157,9 @@ def import_md_file(db: KernelDB, element: str, md_path: str, source: str = "", c
     上游这里写死 `stock`（因为只服务 `investments/timelines/`），但本包也用来收主题类档
     （如"某交易逻辑"），一律标成股票是错的。`category` 由调用方按实际语义给。
     """
-    with open(md_path, encoding="utf-8") as fh:
+    # encoding="utf-8-sig"：Windows 记事本 / PowerShell 5.1 写出来的 .md 常带 BOM，
+    # 带 BOM 时首行行首是 \ufeff，`^[-*]\s*日期` 匹配不上 ⇒ **静默解析出 0 条事件**（实测踩过）。
+    with open(md_path, encoding="utf-8-sig") as fh:
         text = fh.read()
     evs = _parse_md_timeline(text)
     el = db.find_element(element)

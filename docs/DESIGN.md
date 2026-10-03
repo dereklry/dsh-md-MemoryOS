@@ -245,7 +245,7 @@ python/tests/test_kernel_smoke.py  Python 组闸（内核冒烟 6 条：建库/i
 
 **为什么长成这样**（投资场景为什么是"元素×时间线"、为什么不用纯 md／纯检索）＝`JUDGMENTS.md` §5.9。
 
-**怎么用**：模型侧走 `memoryos_elements`（`ingest`／`import`／`save`／`context`／`timeline`／`snapshot`／`all`／`expire`／`export`）；人在设置面板看到两处——`element-db` 那一行的**状态**（与其它功能同口径：现算、可降级、缺 Python 只影响这一项），以及**「元素库」页签**的**数据**（规模计数、元素清单前 40、多点快照索引；走 `/elements` **懒加载、只读**）。
+**怎么用**：模型侧走 `memoryos_elements`（`ingest`／`import`／`save`／`context`／`tree`／`merge`／`recall`／`decide`／`timeline`／`snapshot`／`all`／`expire`／`export`）；人在设置面板看到两处——`element-db` 那一行的**状态**（与其它功能同口径：现算、可降级、缺 Python 只影响这一项），以及**「元素库」页签**的**数据**（规模计数、元素清单前 40、多点快照索引；走 `/elements` **懒加载、只读**）。
 
 **抽取的两条通道（设计上有，本包当前只发规则层）**：内核里所有"要模型"的环节都靠**外部注入 client**——LLM 通道用 `DEEPSEEK_API_KEY`（`extract.llm_extract`／`relevance.llm_review`／`decide.llm_decide`／`resolve.llm_resolve`／`profile.llm_triage`／`methods`），Jev 快判通道用 `JEV_API_KEY`（`jev_resolve`／`jev_relevance`／`jev_triage`）。**本包的精简 CLI 不注入 client**（`ingest` 只传 text/source/elements）⇒ **当前全链路零 LLM 调用、零 Key 需求**，`ingest` 返回里的 `llm:false` 就是证据。哪天要接，按 `JUDGMENTS.md` §5.9.5：加**显式开关**（默认关），而不是"有 Key 就自动开"。
 
@@ -346,7 +346,7 @@ python/tests/test_kernel_smoke.py  Python 组闸（内核冒烟 6 条：建库/i
 | `memoryos_setup` | `action:'probe'|'save-key'|'where-key'|'list'`,`reason`（必填）,`feature?`,`key?`,`path?`,`allow_in_repo?` | 测通结果（含延迟与上游摘要）／代存落点与掩码／当前 Key 在哪／配置账本与待办 |
 | `memoryos_graph` | `action:'status'|'build'|'light'|'check'|'archive-check'`,`query?`,`depth?`,`max_nodes?`,`reason?`,`file?`,`no_refresh?` | 图水位／重建结果（节点·边·未解析数）／`light` 亮起子图（带 reason 与解析级别，落空给候选）／`check` 盲区清单／**`archive-check` 提交前归档闸**（三条判据的 warn/info 表＋豁免清单；`file?`、`no_refresh?` 只给调试） |
 | `memoryos_surface` | `action:'list'|'add-root'|'drop-root'|'add-exclude'|'drop-exclude'|'preview'`,`path?`,`pattern?`,`reason`（写操作必填） | 资料面现状（每根纳管多少 `.md`、被哪条规则挡多少、样本路径）／增删目录与排除／试算。删 `profile` 基线会被拒；`.md` 之外的类型不放开 |
-| `memoryos_elements` | `action:'status'|'ingest'|'timeline'|'snapshot'|'all'|'expire'|'export'`,`text?`,`element?`,`elements?`,`source?`,`since?`,`limit?`,`fragment?`,`path?` | 库规模与落点／入库统计（新增元素·事件·链接 ＋ **未落库的待确认候选**）／某元素时间线（每条带 `ts`·来源·状态）／快照（内核形状 `{element_id, latest, active_count}` 渲染成人话）／元素清单／按片段标失效／导出 md 镜像；**缺 Python 时只这一个工具不可用** |
+| `memoryos_elements` | `action:'status'|'ingest'|'import'|'save'|'context'|'tree'|'merge'|'recall'|'decide'|'timeline'|'snapshot'|'all'|'expire'|'export'`,`text?`,`element?`,`elements?`,`source?`,`since?`,`limit?`,`fragment?`,`path?`,`category?`,`note?`,`query?`,`from?`,`to?`,`confirm?`,`no_alias?`,`mode?`,`top?`,`depth?`,`as_of?`,`status?` | 库规模与落点／入库统计（含**未落库的待确认候选**）／某元素时间线（带 `ts`·来源·状态）／快照／元素清单／**元素树与归宿**（不带 element＝全库概览）／**碎片合并**（不给 `confirm` 只预演；append-only）／**关联度召回**（四项加权＋分解分；无 LLM 亦可）／**决策流水线**（无 LLM/Jev 时给"材料" `decision_package`，并记一条 decision）／按片段标失效／导出 md 镜像；**缺 Python 时只这一个工具不可用** |
 
 ### 6.4 面板（`settings.section`，`id:'memoryos'`，`order:120`，label「记忆系统」）
 

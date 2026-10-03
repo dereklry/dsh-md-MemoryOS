@@ -101,6 +101,33 @@ def main() -> int:
         if not d or d.get("files") != 1:
             fails.append(f"index 应报 1 份快照：out={p.stdout[:200]}")
 
+        # 元素树 / 关联度召回 / 决策材料（无 LLM）／碎片合并
+        p, d = run(["tree"], tmp)
+        if not isinstance(d, list) or len(d) != 2:
+            fails.append(f"tree（全库概览）应列出 2 个元素：out={p.stdout[:200]}")
+        p, d = run(["tree", "某交易逻辑"], tmp)
+        if not d or not d.get("found") or not isinstance(d.get("tree"), list):
+            fails.append(f"tree <元素> 应给出该元素的树：out={p.stdout[:200]}")
+        p, d = run(["recall", "某交易逻辑"], tmp)
+        names = [r.get("name") for r in (d or {}).get("results") or []]
+        if "510300" not in names:
+            fails.append(f"recall 应从「某交易逻辑」召回 510300（同日共现有分）：out={p.stdout[:240]}")
+        p, d = run(["decide", "某交易逻辑 该怎么办", "--mode", "quick"], tmp)
+        if not d or not d.get("decision_id") or not d.get("decision_package"):
+            fails.append(f"decide(quick) 应给出决策包（无 LLM 时＝材料）：out={p.stdout[:240]}")
+        p, d = run(["merge", "--from", "某交易逻辑", "--to", "510300"], tmp)
+        if not d or not d.get("dry_run"):
+            fails.append(f"merge 不给 --confirm 应只预演：out={p.stdout[:200]}")
+        p, d2 = run(["tree"], tmp)
+        if not isinstance(d2, list) or len(d2) != 2:
+            fails.append("merge 预演不应改库（元素数仍为 2）")
+        p, d = run(["merge", "--from", "某交易逻辑", "--to", "510300", "--confirm"], tmp)
+        if not d or (d.get("aliases") or 0) < 1:
+            fails.append(f"merge 真写应归并至少 1 个别名：out={p.stdout[:200]}")
+        p, d = run(["tree"], tmp)
+        if not isinstance(d, list) or len(d) != 1:
+            fails.append(f"merge 后应只剩 1 个元素：out={p.stdout[:200]}")
+
         p, d = run(["status"], tmp)
         if not d or ((d.get("counts") or {}).get("events") != 4):
             fails.append(f"status 应报 events=4（ingest 1 + import 2 + 快照点 1）：out={p.stdout[:200]}")
@@ -110,7 +137,7 @@ def main() -> int:
         for f in fails:
             print(" -", f)
         return 1
-    print("ALL PASS (kernel smoke: 16 checks)")
+    print("ALL PASS (kernel smoke: 24 checks)")
     return 0
 
 

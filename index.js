@@ -656,14 +656,87 @@ export function apply(ctx, config) {
       }
       return { ok: true, message: `最新快照＝当前运行逻辑（${d.snapshot.file}，拍于 ${d.snapshot.stamp}）：\n\n${d.content}${d.truncated ? `\n（快照较长已截断，全文：${d.snapshot.path}）` : ''}${tail}` }
     }
-    return { ok: false, message: `未知动作：${action}（可用 status | ingest | import | save | context | timeline | snapshot | all | expire | export）` }
+    if (action === 'tree') {
+      const el = String(args.element || '').trim()
+      const depth = numArg(args.depth, 3)
+      const r = await callKernel(el ? ['tree', el, '--depth', depth] : ['tree'])
+      if (!r.ok) return { ok: false, message: r.message }
+      const d = r.data
+      if (Array.isArray(d)) {
+        if (!d.length) return { ok: true, message: '元素库还是空的。' }
+        const rows = d.slice(0, 60).map((x) => {
+          const kids = (x.children || []).length
+          const pars = (x.parents || []).length
+          return `- ${x.name}（${x.category || '—'}${kids ? `，${kids} 个子` : ''}${pars ? `，父 ${(x.parents || []).join('/')}` : ''}）`
+        })
+        return { ok: true, message: `元素树概览（共 ${d.length} 个，最多列 60）：\n${rows.join('\n')}${d.length > 60 ? `\n（另有 ${d.length - 60} 个未列）` : ''}` }
+      }
+      if (!d || d.found === false) return { ok: true, message: `元素库里没有「${el}」。` }
+      const tree = Array.isArray(d.tree) ? d.tree : []
+      const lines = tree.map((n) => `${'  '.repeat(Math.max(0, (n.depth || 1) - 1))}- ${n.name}（${n.category || '—'}${n.events != null ? `，${n.events} 条事件` : ''}）`)
+      const pars = (d.parents || []).map((p) => `${p.name}${p.role ? `[${p.role}${p.period ? '·' + p.period : ''}]` : ''}`)
+      return { ok: true, message: `「${d.element}」的树（含自身与子元素）：\n${lines.join('\n') || '（空）'}${pars.length ? `\n父归属：${pars.join(' / ')}` : '\n父归属：（无）'}` }
+    }
+    if (action === 'merge') {
+      const from = String(args.from || '').trim()
+      const to = String(args.to || '').trim()
+      if (!from || !to) return { ok: false, message: 'merge 要同时给 from（碎片）与 to（保留者）' }
+      const argv = ['merge', '--from', from, '--to', to]
+      if (args.no_alias) argv.push('--no-alias')
+      if (args.confirm) argv.push('--confirm')
+      const r = await callKernel(argv, 60000)
+      if (!r.ok) return { ok: false, message: r.message }
+      const d = r.data || {}
+      if (d.dry_run) return { ok: true, message: `${d.note}\n（这是**预演**，库里什么都没改；真要合并请再调一次并带 confirm:true）` }
+      if (d.ok === false) return { ok: false, message: d.note || '合并失败' }
+      return { ok: true, message: `已合并：事件重挂 ${d.events ?? 0}｜别名归并 ${d.aliases ?? 0}｜链接 ${d.links ?? 0}｜产出物 ${d.artifacts ?? 0}｜子树 ${d.children ?? 0}｜父 ${d.parents ?? 0}\n（append-only：事件没删，只是重挂到「${to}」；"${from}"${args.no_alias ? '未' : '已'}留作别名）` }
+    }
+    if (action === 'recall') {
+      const q = String(args.query || '').trim()
+      if (!q) return { ok: false, message: 'recall 要给 query（**别把要找的元素名也写进去**——query 里提到的元素会被当作"起点"，不会再出现在结果里）' }
+      const r = await callKernel(['recall', q, '--top', numArg(args.top, 10)], 60000)
+      if (!r.ok) return { ok: false, message: r.message }
+      const d = r.data || {}
+      const list = Array.isArray(d.results) ? d.results : []
+      const amb = Array.isArray(d.ambiguous) && d.ambiguous.length
+        ? `\n\n⚠ 有歧义没定：${d.ambiguous.map((x) => `${x.token}（候选 ${(x.candidates || []).join('/')}）`).join('；')}` : ''
+      if (!list.length) {
+        return { ok: true, message: `按关联度召回：**没有候选**。\n常见原因两种：① 库里除了 query 提到的元素之外**没有别的元素**；② 别的元素与它既无文本相似、又无同日共现、也无关联边。${amb}` }
+      }
+      const rows = list.map((x) => {
+        const comp = x.components || {}
+        return `- ${x.name}（${x.category || '—'}）分 ${x.score ?? x.hard}＝文本 ${comp.text_sim ?? 0}×0.4 ＋ 链接 ${comp.link_s ?? 0}×0.3 ＋ 共现 ${comp.co_occur ?? 0}×0.2 ＋ 类标 ${comp.cat_tag ?? 0}×0.1`
+      })
+      return { ok: true, message: `按关联度召回（模式 ${d.mode || 'quick'}｜LLM ${d.llm_used ? '用了' : '没用'}｜Jev ${d.jev_used ? '用了' : '没用'}）：\n${rows.join('\n')}\n\n**这是材料不是结论**：分数只说明"可能相关"，要不要用它由你判断。${amb}` }
+    }
+    if (action === 'decide') {
+      const q = String(args.query || '').trim()
+      if (!q) return { ok: false, message: 'decide 要给 query（要拍板的问题）' }
+      const argv = ['decide', q, '--mode', String(args.mode || 'quick'), '--top', numArg(args.top, 8)]
+      if (args.as_of) argv.push('--as-of', String(args.as_of))
+      if (args.show_profile) argv.push('--show-profile')
+      const r = await callKernel(argv, 60000)
+      if (!r.ok) return { ok: false, message: r.message }
+      const d = r.data || {}
+      const used = (d.elements_used || []).map((x) => `${x.name}(${x.level})`).join('、')
+      const head = `决策流水线（模式 ${d.mode}${d.as_of ? `，历史视角 ${d.as_of}` : ''}）｜记了一条决策记录 #${d.decision_id}｜用到：${used || '（无）'}`
+      if (d.llm_decision) {
+        return { ok: true, message: `${head}\n\n**LLM 决策 JSON**：\n\`\`\`json\n${JSON.stringify(d.llm_decision, null, 2)}\n\`\`\`` }
+      }
+      return { ok: true, message: `${head}\n\n**没有 LLM／Jev 通道，所以给的是"决策材料"而不是结论**（本包口径：材料归工具、拍板归你）：\n\n${d.decision_package || '（决策包为空）'}` }
+    }
+    return { ok: false, message: `未知动作：${action}（可用 status | ingest | import | save | context | tree | merge | recall | decide | timeline | snapshot | all | expire | export）` }
   }
 
   reg(defineTool({
     name: 'memoryos_elements',
     description:
       'MemoryOS 的**元素库**（元素-时间线内核，随包发的本地 SQLite）：把聊到/写下的**元素 + 带时间戳的事件 + 关联边**固化下来，之后能按元素拉时间线、看快照、标失效、导出 Markdown 镜像。'
-      + '动作：`status`（库规模与落点）｜`ingest`（要 text；把一段话抽成元素+事件入库）｜`import`（要 element+path；把一份 **Markdown 时间线档**按元素导入）｜`timeline`（要 element；某元素按时间的多股绳）｜`snapshot`（要 element；最近状态）｜`all`（库里都有谁）｜`expire`（element+fragment；按内容片段标失效，不删历史）｜`export`（导出 md 镜像）。'
+      + '动作：`status`（库规模与落点）｜`ingest`（要 text；把一段话抽成元素+事件入库）｜`import`（要 element+path；把一份 **Markdown 时间线档**按元素导入）｜`tree`（元素树与归宿；不带 element＝全库概览）｜`merge`（要 from+to；碎片元素合并，**不给 confirm 只预演**）｜`recall`（要 query；按关联度召回相关元素）｜`decide`（要 query；决策流水线，出"材料"或"决策 JSON"）｜`timeline`（要 element；某元素按时间的多股绳）｜`snapshot`（要 element；最近状态）｜`all`（库里都有谁）｜`expire`（element+fragment；按内容片段标失效，不删历史）｜`export`（导出 md 镜像）。'
+      + '**`recall` 的口径**：它是"**从 query 里提到的元素出发，去找库里别的元素**"——四项加权＝文本相似 0.4＋**关联边跳数 0.3**＋**同日共现 0.2**＋类别标签 0.1。所以：**query 里别写你要找的那个元素名**（写了它就成了起点，不会出现在结果里）；库里只有一个元素时**必然没有候选**，这是对的不是坏了。**无 LLM/无 Key 也能跑**（没有关联边那一项，靠文本与共现；`components` 会如实报每一项）。**分数是材料不是结论。**'
+      + '**`decide` 的口径**：`quick`（默认）＝轮廓包，交给你筛选与推理；`full`＝有 LLM/Jev 时才加精评与决策 JSON。**本包当前没接 LLM 通道，所以拿到的是 `decision_package`（材料）而不是结论**——这正是本包的分工（材料归工具、拍板归人）。每次调用会往 `decisions` 表**记一条**（可回溯当时用了哪些元素）。'
+      + '**`merge` 是写操作**：把碎片元素并进规范元素（事件重挂／别名归并／链接归并／产出物／子树），**append-only——事件不删只重挂**；**不带 `confirm` 只预演**（先看会动什么再决定）。元素建重复了就该合并，否则同一个东西会有两条线。'
+      + '**`tree` 看的是"归宿"**：元素可以有父（主归属树）也可以挂到多个父（多父多子 DAG，带 `role`/`period`）；`tree` 不传 element 就给全库概览（谁有子、谁是孤儿）。'
       + '**`import` 认的档长这样**：`- YYYY-MM-DD 内容 [已失效] → 引用`（`→` 后面进事件的 `ref`，`[已失效]` 标 expired）；**幂等**——重复导入自动去重；元素不存在则新建（`category` 默认 `generic`，别指望它自动判成"股票"）。上游 `import-timelines` 的惯例是**文件名去掉 `.md` 就当元素名**，本工具要你显式给 `element`。'
       + '**"md 与库两处都有"的正确口径（别搞成双写）**：**md 是人的输入**、**库是查询/决策端**——`import` 是单向幂等搬运（**读源档、不改原件**），`export` 出来的 md 是**派生镜像**（别手改：要改就改库，或改源 md 后重新导入）。两边同时手改＝双写，迟早对不上、且没有仲裁者。'
       + '**`save` ＝ 多点快照的生产者**：把该元素当前状态拍成 `<数据根>/exports/<元素>_snap_<时间戳>.md`，**并往时间线写一个点**（`source=snapshot`、`ref=` 快照档），同时重建 `exports/INDEX.md`。**`context` ＝取最新快照（＝当前运行逻辑）**，并附"自快照以来新增了什么"。这就是"**每归档/commit 一次流一个快照，提及时取最后一次**"那条用法（时间线两种读法：逐条事件 vs 多点快照）。'
@@ -674,7 +747,16 @@ export function apply(ctx, config) {
       + '库落 `<数据根>/elements/memory.db`（与指针图分开两个数据根）；python 找不到时**只这一个工具不可用**，面板与词法检索照常。'
       + '它管的是**结构化事实**（谁在什么时候做了什么）；"这件事该读哪份 md"仍走 memoryos_graph 的词法落点——两者不是一回事，别互相替代。',
     parameters: {
-      action: { type: 'string', required: true, description: 'status | ingest | import | save | context | timeline | snapshot | all | expire | export' },
+      action: { type: 'string', required: true, description: 'status | ingest | import | save | context | tree | merge | recall | decide | timeline | snapshot | all | expire | export' },
+      query: { type: 'string', description: '仅 recall/decide：一句话（recall 时**别写要找的元素名**）' },
+      from: { type: 'string', description: '仅 merge：要被并入的碎片元素' },
+      to: { type: 'string', description: '仅 merge：保留的规范元素' },
+      confirm: { type: 'boolean', description: '仅 merge：true 才真写；不给则只预演' },
+      no_alias: { type: 'boolean', description: '仅 merge：true＝不把 from 的名字留作别名（默认保留）' },
+      mode: { type: 'string', description: "仅 decide：quick（默认，出材料）| full（有 LLM/Jev 时出决策 JSON）" },
+      top: { type: 'number', description: '仅 recall/decide：返回几条（recall 默认 10，decide 默认 8）' },
+      depth: { type: 'number', description: '仅 tree：下钻几层（默认 3）' },
+      show_profile: { type: 'boolean', description: '仅 decide：附带轮廓原文（debug 用）' },
       text: { type: 'string', description: '仅 ingest：要固化进元素库的那段话' },
       source: { type: 'string', description: '仅 ingest：来源标注（如对话/文件名，便于回溯）' },
       elements: { type: 'string', description: '仅 ingest：已知元素，逗号分隔（给了它就走保守模式：不新建元素，未知名挂到主元素）' },
