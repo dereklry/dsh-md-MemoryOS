@@ -77,6 +77,7 @@ agents.md（入口·指引 LLM 去读哪本手册）
   │      memoryos_surface list · add-root · drop-root · add-exclude · drop-exclude · preview
 │      memoryos_graph   status · build · light（**默认＝落点清单**：哪条目/哪文件/哪行＋**条目的专档行**，跳过目录直达；`expand:true` 才给邻域地图；**零命中自动扫域内正文**；**过泛时只回一个数**）· check（盲区清单）· archive-check（提交前归档闸）
 │      memoryos_elements status · ingest（一段话 → 元素＋**带时间戳事件**入库）· timeline（某元素的多股绳）· snapshot · all · expire · export（元素-时间线内核：随包发的本地 SQLite，无 Key 也能用规则层抽取）
+  │    元素库管的是"**这件事本身的来龙去脉**"（元素 × 时间：投资就是一条多股绳），**不是**"资料在哪"——后者仍走 memoryos_graph（为什么不合成一件事＝`docs/JUDGMENTS.md` §5.9）
   │    现在要你自己触发：图不会自己建 ⇒ 先 memoryos_graph(action=build)（或面板「资料面」页的重建按钮）
 │    待搬进来才有的：建档、候选队列、定时维护（**语义寻路不在清单里——本包不做，见文首对齐说明**）
   │    面板看：账本页「谁做的·为什么·什么时候」＋概览页 Key 与「模型可否改开关」

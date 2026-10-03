@@ -48,8 +48,11 @@ lib/surface.js         资料面登记（目录并集、排除匹配、扫描计
 lib/graph.js           指针图（扫 .md → 节点/边 → graph.json；light 两级解析＋BFS；check 盲区）
 lib/archive.js         归档闸（提交前检查：未提交新增档有没有人引用／回指条目号悬不悬空／新条目有没有人回指）
 lib/api.js            面板 HTTP 面（延迟挂载 + prefix JSON 404 兜底 + 写后回快照）
+lib/kernel.js         元素库内核的 JS 壳（找 python → spawn `-m memoryos_kernel` → JSON；可注入 kernelCall 供闸离线测渲染）
 test/load.js          离线闸（零网络；条数看输出末行）
 test/stub-dsh-tools.mjs  宿主 dsh-tools 的恒等替身（让闸不依赖 DSH 安装）
+python/memoryos_kernel/  元素-时间线内核（**随包发**；纯标准库；已剥离台账面）
+python/tests/test_kernel_smoke.py  Python 组闸（内核冒烟 6 条：建库/ingest/timeline/snapshot/expire/status）
 ```
 
 **依赖方向是单向的**：`index.js → lib/*`；`lib/*` 之间只有 `switches.expandHome` 与 `setup.maskKey` 两处被复用，`features.js` 是叶子（谁都能依赖它，它不依赖任何人）。这条约束的意义：登记表可以独立被闸和工具读取，不会出现"读表要先起宿主"。
@@ -219,6 +222,33 @@ test/stub-dsh-tools.mjs  宿主 dsh-tools 的恒等替身（让闸不依赖 DSH 
 
 ---
 
+### 3.6 `<dataDir>/elements/memory.db` —— 元素库（结构化事实，随包发的 Python 内核）
+
+**它不是账，是库**：三本账（§3.1–§3.3）记"谁切了开关／做过哪些准备／管到哪些目录"，图（§3.4）是派生缓存；元素库装的是**用户自己的结构化事实**（谁在什么时候做了什么），所以**独立一个数据根**、单独备份、**删了不可重建**。
+
+表结构（内核 `python/memoryos_kernel/db.py`，SQLite）：
+
+| 表 | 一行是什么 | 关键约束 |
+|---|---|---|
+| `elements` | 一个实体／项目／概念 | `name` 归一化后唯一；`aliases`／`tags`／`meta` 为 JSON 串；`parent_id`＋`depth` 支撑树与多股绳 |
+| `events` | **带时间戳的事实** | `UNIQUE(element_id, ts, content)`（幂等）；`ts=''`＋`status='pending'`＝**待定区**；`status`＝active／expired／pending；`raw` 留原文片段、`ts_source` 记时间来源（explicit／rule／llm／corrected／empty） |
+| `links` | 元素之间的关系边 | `UNIQUE(from_id, to_id, relation)`；`strength` 0–1；`method`＝hard／llm／manual |
+| `decisions` | 拍板记录（result/outcome 可后补） | 与事件分开：**事实与决策不是一回事** |
+| `llm_cache` | LLM 评审结果本地缓存 | 省钱提速，删了可重建 |
+
+**四条铁律**（内核注释原文，本包照此执行）：
+
+1. **events 必须带时间属性**；无时间 → `ts=''` 且 `status='pending'`（待定区）——**不伪造时间**；
+2. **不覆盖式修改历史**（append-only；作废用 `status='expired'` **标记**，不删）；
+3. **幂等**：element 按 name 归一化、event 按 `(element_id, ts, content)` 去重；
+4. **LLM 只在两处用**（精抽、模糊评审），失败降级规则层 ⇒ **没有 API Key 也能记**。
+
+**为什么长成这样**（投资场景为什么是"元素×时间线"、为什么不用纯 md／纯检索）＝`JUDGMENTS.md` §5.9。
+
+**怎么用**：模型侧走 `memoryos_elements`（`ingest`／`timeline`／`snapshot`／`all`／`expire`／`export`）；人在设置面板看到的是 `element-db` 那一行的状态（与其它功能同口径：现算、可降级、缺 Python 只影响这一项）。**面板目前没有元素库页**（只有状态行）——那属"待搬入"，不假装已有。
+
+---
+
 ## 4. 状态机（派生，不存储）
 
 ```
@@ -298,7 +328,7 @@ test/stub-dsh-tools.mjs  宿主 dsh-tools 的恒等替身（让闸不依赖 DSH 
        configHints{memoryRoot[],pythonBin,graphDb,kernelRepo,keyFile,baseUrl,allowKeyInRepo}} }
 ```
 
-### 6.3 模型工具（五个）
+### 6.3 模型工具（六个）
 
 | 工具 | 参数 | 返回 |
 |---|---|---|
@@ -307,6 +337,7 @@ test/stub-dsh-tools.mjs  宿主 dsh-tools 的恒等替身（让闸不依赖 DSH 
 | `memoryos_setup` | `action:'probe'|'save-key'|'where-key'|'list'`,`reason`（必填）,`feature?`,`key?`,`path?`,`allow_in_repo?` | 测通结果（含延迟与上游摘要）／代存落点与掩码／当前 Key 在哪／配置账本与待办 |
 | `memoryos_graph` | `action:'status'|'build'|'light'|'check'|'archive-check'`,`query?`,`depth?`,`max_nodes?`,`reason?`,`file?`,`no_refresh?` | 图水位／重建结果（节点·边·未解析数）／`light` 亮起子图（带 reason 与解析级别，落空给候选）／`check` 盲区清单／**`archive-check` 提交前归档闸**（三条判据的 warn/info 表＋豁免清单；`file?`、`no_refresh?` 只给调试） |
 | `memoryos_surface` | `action:'list'|'add-root'|'drop-root'|'add-exclude'|'drop-exclude'|'preview'`,`path?`,`pattern?`,`reason`（写操作必填） | 资料面现状（每根纳管多少 `.md`、被哪条规则挡多少、样本路径）／增删目录与排除／试算。删 `profile` 基线会被拒；`.md` 之外的类型不放开 |
+| `memoryos_elements` | `action:'status'|'ingest'|'timeline'|'snapshot'|'all'|'expire'|'export'`,`text?`,`element?`,`elements?`,`source?`,`since?`,`limit?`,`fragment?`,`path?` | 库规模与落点／入库统计（新增元素·事件·链接 ＋ **未落库的待确认候选**）／某元素时间线（每条带 `ts`·来源·状态）／快照（内核形状 `{element_id, latest, active_count}` 渲染成人话）／元素清单／按片段标失效／导出 md 镜像；**缺 Python 时只这一个工具不可用** |
 
 ### 6.4 面板（`settings.section`，`id:'memoryos'`，`order:120`，label「记忆系统」）
 

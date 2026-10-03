@@ -1,6 +1,7 @@
 # dsh-md-MemoryOS
 
 > 把「以 md 文档为核心、以元素索引为线」的个人记忆系统装进 DSH：建立 → 维护 → 使用，全部可在**设置 → 记忆系统**里看见和掌控。
+> **两个切面别读混**：**md 文档＋指针图**回答"这件事该读哪份资料"（词法落点，零账、可逐级钻取）；**元素库**回答"这件事本身的来龙去脉"（元素 × 带时间戳事件，本地 SQLite，内核随包发）——各答一个问题、分成两个数据根，理由＝[`docs/JUDGMENTS.md`](docs/JUDGMENTS.md) §5.9。
 > 状态：v0.9.0-win.0（控制面板 + 功能开关账本 + 资料面管理 + **指针图**〔`build`/`light`/`check`，`light` **默认只给"落点清单"**——md 自带索引，工具只负责"跳过目录、直达搜索词所在的条目+文件"，**命中的条目后紧跟它的"专档"行**（回指本条目＋文件名由载体文件派生，摘要＝回指行原文）；要邻域地图加 `expand:true`；零命中时**自动扫域内正文**；**过泛查询只回一个数**〕+ **提交前归档闸**；**本包检索能力＝纯词法**——**语义寻路（find）与每回合自动指路（radar）不实现、不登记**（2026-10-02 与代码对齐，理由＝`docs/JUDGMENTS.md` §5.6）；与 Jev 相关的只有 `jev-engine` ＝凭据＋通道测通；**元素库（元素-时间线内核：随包发的 Python 纯标准库，落本地 SQLite）已落地**；建档、候选、定时维护等待搬入）。
 > 作者一句话：调用agent完成工作后，就需要归档=写md文件记本次完成了啥，所以本机agent手写md文件=记忆。如何管理记忆，自然是建立层级索引，使记录的内容能被LLM找到。OS只是加快、跳过逐级查询，并在归档契约中增加检查点，促进LLM形成可持续迭代的记忆内容。
 > 本OS开发环境（win11+DSH0.1.5~0.2.0rc2，DSH Desktop v2.x，qwen3.8-flash/deepseek-v4.1flash），环境不同，请调用LLM进行适配性改造。
@@ -29,6 +30,8 @@ MemoryOS 的做法不是再给你一个数据库，而是三件事咬合：
 | **维护** | 周期性重建图 + 跑体检，盲区（悬空指针、查不到的词）自动变成**候选**，等人确认才落表 | 记忆面·维护 + 个性化 |
 
 设计全文（三层拆分：机制层可打包／内容层禁打包／自举层要自己长）见 `docs/`。
+
+> **除了"资料在哪"，还有"事情本身"**：上表三件事管的是 **md 记忆**（人写的、可逐级钻取）。另一类需求 md 答不了——"这个标的过去发生过什么、我是什么时候改的主意"——那是 **元素 × 带时间戳事件** 的结构化事实，由**元素库**承担（`memoryos_elements`：入库／时间线／快照／标失效／导出 md；内核随包发，**无 API Key 也能用规则层**）。**为什么不让一个机制全包**＝[`docs/JUDGMENTS.md`](docs/JUDGMENTS.md) §5.9。
 
 ## 两类功能，两种控制形态（本项目的主要设计判断）
 
@@ -97,7 +100,7 @@ python python/tests/test_kernel_smoke.py   # Python 组：元素库内核冒烟�
 ## 目录
 
 ```
-index.js          宿主半：快照、唯一写入口、配置动作、五个工具、面板数据面挂载
+index.js          宿主半：快照、唯一写入口、配置动作、六个工具、面板数据面挂载
 client.js         浏览器半：设置 → 记忆系统 控制面板（手写 ModuleLoader，零构建链）
 lib/features.js   功能登记表（唯一权威：显示什么、谁能操作、缺什么算不算生效）
 lib/switches.js   开关账本（append-only）+ 写侧权限 + 状态派生
@@ -108,7 +111,10 @@ lib/setup.js      配置账本 + Jev 测通（node:https，可注入 transport �
 lib/probes.js     依赖探针 / 步骤探针（纯本地 fs/env，5 秒缓存）
 lib/keystore.js   Key 落点：凭据面优先 + git 工作树守卫 + 掩码
 lib/api.js        面板 HTTP 面（ctx.inject(['webServer']) 延迟挂载 + JSON 404 兜底）
-test/load.js      上面那个闸
+lib/kernel.js     元素库内核的 JS 壳（找 python → spawn `-m memoryos_kernel` → JSON；可注入 kernelCall）
+test/load.js      上面那个闸（JS 组）
+python/memoryos_kernel/  元素-时间线内核（随包发；纯标准库；剥离台账面）
+python/tests/test_kernel_smoke.py  Python 组闸（内核冒烟 6 条）
 ```
 
 ## 许可
