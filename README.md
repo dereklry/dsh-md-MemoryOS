@@ -88,7 +88,8 @@ pnpm add link:<本仓路径>
 ## 跑闸（零依赖、零联网）
 
 ```bash
-node test/load.js          # 或：ELECTRON_RUN_AS_NODE=1 <DSH 二进制> test/load.js
+node test/load.js          # JS 组（或：ELECTRON_RUN_AS_NODE=1 <DSH 二进制> test/load.js）
+python python/tests/test_kernel_smoke.py   # Python 组：元素库内核冒烟（建库/ingest/timeline/snapshot/expire/status）
 ```
 
 断言条数看输出末行（只增不减，写死在文档里就成了漂移源）。覆盖：登记表自洽 / 探针同源 / 写侧权限矩阵 / 状态派生真值表 / 宿主接线端到端（含配置动作全生命周期）/ 明文 Key 不外泄 / 资料面与指针图 / **归档闸（文件头契约、非 ASCII 路径解转义、真 git 仓端到端）** / 面板装载契约四条 + 前后端路由对账 + 文档与代码对账 + 样式与语法静态禁手。
